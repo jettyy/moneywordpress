@@ -1,0 +1,21 @@
+{
+  "name": "moneyrush",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "큰 주제 하나만 넣으면 웹 검색으로 최신 정보 중 사람들이 가장 많이 찾는 글감을 골라, 애드센스 승인 기준을 지킨 글과 썸네일을 만들어 워드프레스에 정한 개수만큼 임시저장합니다.",
+  "main": "src/server.js",
+  "scripts": {
+    "start": "node src/server.js",
+    "dev": "node --watch src/server.js",
+    "setup": "node scripts/setup.js",
+    "check": "node scripts/check.js"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "express": "^5.2.1",
+    "playwright": "^1.49.1"
+  }
+}
