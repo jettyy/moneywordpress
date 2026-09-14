@@ -25,7 +25,14 @@ import { renderTemplate } from '../src/content/templates/index.js';
 import { buildResearchBlock, isUsableUrl } from '../src/content/research.js';
 import { buildDiscoverPrompt, normalizePick, screenPicks } from '../src/content/discover.js';
 import { topicKey } from '../src/lib/history.js';
-import { planNextStep } from '../src/queue/runner.js';
+import { planNextStep, discoverCapFor } from '../src/queue/runner.js';
+import {
+  REQUEST_STATUS, addRequest, nextRequest, finishRequest, updateRequest,
+  requestStats, clearRequests,
+} from '../src/lib/requests.js';
+import {
+  addTopics, nextPending, cancelPendingJobs, listJobs, clearJobs,
+} from '../src/lib/store.js';
 import { normalizeSiteUrl, normalizeSlug, parseTopics } from '../src/lib/util.js';
 
 const settings = structuredClone(DEFAULT_SETTINGS);
@@ -681,36 +688,122 @@ test('주제 비교 열쇠는 공백과 기호를 무시한다', () => {
 
 /* ---------- 자동 실행 루프의 판단 ---------- */
 
-const plan = (patch) => planNextStep({
-  saved: 0, goal: 5, hasPending: false, bigTopic: '전기차', queued: 0, queuedCap: 15, ...patch,
+const order = (patch = {}) => ({
+  id: 'r1', bigTopic: '전기차', targetCount: 5, saved: 0, discovered: 0, ...patch,
 });
+const plan = (hasPending, request) => planNextStep({ hasPending, request });
 
 test('대기 주제가 있으면 그것부터 쓴다', () => {
-  assert.equal(plan({ hasPending: true }), 'process');
+  assert.equal(plan(true, order()), 'process');
 });
 
-test('목표를 채우면 대기 주제가 남아 있어도 끝낸다', () => {
-  assert.equal(plan({ saved: 5, hasPending: true }), 'done');
-  assert.equal(plan({ saved: 7, hasPending: true }), 'done', '넘겨도 끝내야 합니다');
+test('목표를 채우면 남은 주제가 있어도 그 주문을 닫는다', () => {
+  // 닫아야 다음 주문으로 넘어간다. 넉넉히 받아 둔 주제를 마저 쓰면 안 된다.
+  assert.equal(plan(true, order({ saved: 5 })), 'finish-request');
+  assert.equal(plan(false, order({ saved: 7 })), 'finish-request', '넘겨도 닫아야 합니다');
 });
 
-test('대기가 떨어지면 큰 주제로 새로 찾아온다', () => {
-  assert.equal(plan({ saved: 2, hasPending: false }), 'discover');
+test('대기가 떨어지면 그 주문의 큰 주제로 새로 찾아온다', () => {
+  assert.equal(plan(false, order({ saved: 2 })), 'discover');
 });
 
-test('큰 주제가 없으면 예전처럼 목록을 다 쓰고 끝낸다', () => {
-  assert.equal(plan({ bigTopic: '', goal: 0, hasPending: true }), 'process');
-  assert.equal(plan({ bigTopic: '', goal: 0, hasPending: false }), 'stop-empty');
-  // 큰 주제는 있는데 개수를 0으로 둔 경우도 계속 찾아오면 안 된다.
-  assert.equal(plan({ goal: 0, hasPending: false }), 'stop-empty');
+test('주문이 없으면 손으로 넣은 주제만 쓰고 끝낸다', () => {
+  assert.equal(plan(true, null), 'process');
+  assert.equal(plan(false, null), 'stop-empty');
 });
 
-test('계속 찾아오는데 저장이 안 되면 멈춘다', () => {
-  // 워드프레스가 내려가서 전부 실패하는 상황. 이게 없으면 끝없이 검색만 돈다.
-  assert.equal(plan({ saved: 0, queued: 15 }), 'stop-cap');
-  assert.equal(plan({ saved: 0, queued: 14 }), 'discover');
-  // 상한에 닿아도 대기 중인 주제는 마저 쓴다. 이미 찾아온 것을 버릴 이유가 없다.
-  assert.equal(plan({ saved: 0, queued: 99, hasPending: true }), 'process');
+test('계속 찾아오는데 저장이 안 되면 그 주문을 포기한다', () => {
+  // 워드프레스가 내려가 전부 실패하는 상황. 이게 없으면 끝없이 검색만 돈다.
+  const cap = discoverCapFor(order());
+  assert.equal(cap, 15);
+  assert.equal(plan(false, order({ discovered: cap })), 'give-up-request');
+  assert.equal(plan(false, order({ discovered: cap - 1 })), 'discover');
+  // 상한에 닿아도 이미 찾아온 주제는 마저 쓴다. 버릴 이유가 없다.
+  assert.equal(plan(true, order({ discovered: 99 })), 'process');
+});
+
+test('개수가 적은 주문도 발굴 상한이 너무 빡빡하지 않다', () => {
+  // 1건짜리 주문에 상한이 7이면 한 번 실패하고 두 번째 발굴에서 바로 포기한다.
+  assert.equal(discoverCapFor(order({ targetCount: 1 })), 10);
+  assert.equal(discoverCapFor(order({ targetCount: 20 })), 45);
+});
+
+/* ---------- 주문 대기열 ---------- */
+
+test('주문을 넣은 순서대로 하나씩 꺼낸다', () => {
+  clearRequests(false);
+  const first = addRequest({ bigTopic: '전기차', targetCount: 3 });
+  const second = addRequest({ bigTopic: '부동산', targetCount: 2 });
+
+  assert.equal(nextRequest().id, first.id, '먼저 넣은 주문이 먼저 나와야 합니다');
+
+  // 앞 주문을 끝내면 다음 주문이 올라온다.
+  finishRequest(first.id, REQUEST_STATUS.DONE);
+  assert.equal(nextRequest().id, second.id);
+
+  finishRequest(second.id, REQUEST_STATUS.DONE);
+  assert.equal(nextRequest(), null, '다 끝나면 꺼낼 주문이 없어야 합니다');
+  clearRequests(false);
+});
+
+test('개수는 1 이상으로 맞춰 들어간다', () => {
+  clearRequests(false);
+  assert.equal(addRequest({ bigTopic: '전기차', targetCount: 0 }).targetCount, 1);
+  assert.equal(addRequest({ bigTopic: '전기차', targetCount: -3 }).targetCount, 1);
+  assert.equal(addRequest({ bigTopic: '전기차', targetCount: 9999 }).targetCount, 200);
+  assert.throws(() => addRequest({ bigTopic: '  ' }), /큰 주제/);
+  clearRequests(false);
+});
+
+test('대기열에 남은 글 편수를 센다', () => {
+  clearRequests(false);
+  addRequest({ bigTopic: '전기차', targetCount: 5 });
+  const second = addRequest({ bigTopic: '부동산', targetCount: 3 });
+  updateRequest(second.id, { saved: 2 });
+  assert.deepEqual(requestStats(), { total: 2, open: 2, remaining: 6 });
+  clearRequests(false);
+});
+
+test('같은 큰 주제를 두 번 넣을 수 있다', () => {
+  // "5편 더 뽑아줘" 는 정상적인 요구다. 중복으로 막으면 안 된다.
+  clearRequests(false);
+  addRequest({ bigTopic: '전기차', targetCount: 5 });
+  addRequest({ bigTopic: '전기차', targetCount: 5 });
+  assert.equal(requestStats().open, 2);
+  clearRequests(false);
+});
+
+test('발굴한 주제는 그 주문의 몫으로 붙는다', () => {
+  clearJobs(false);
+  const added = addTopics([{ topic: '전기차 보조금 2026년 개편 내용 정리', score: 80 }], 'req-1');
+  assert.equal(added[0].requestId, 'req-1');
+  // 손으로 넣은 주제는 주문에 딸리지 않는다.
+  assert.equal(addTopics(['직접 적은 주제입니다'])[0].requestId, '');
+  clearJobs(false);
+});
+
+test('손으로 넣은 주제를 발굴한 주제보다 먼저 쓴다', () => {
+  clearJobs(false);
+  addTopics([{ topic: '발굴해 온 주제 하나입니다' }], 'req-1');
+  addTopics(['직접 적은 주제입니다']);
+  assert.equal(nextPending().topic, '직접 적은 주제입니다');
+  clearJobs(false);
+});
+
+test('주문을 닫으면 남은 대기 주제가 건너뜀으로 정리된다', () => {
+  clearJobs(false);
+  addTopics([
+    { topic: '발굴 주제 하나입니다 아주 길게' },
+    { topic: '발굴 주제 둘입니다 아주 길게' },
+  ], 'req-1');
+  addTopics([{ topic: '다른 주문의 주제입니다' }], 'req-2');
+
+  assert.equal(cancelPendingJobs('req-1', '목표를 채워 쓰지 않았습니다.'), 2);
+  const jobs = listJobs();
+  assert.equal(jobs.filter((job) => job.status === 'skipped').length, 2);
+  // 다른 주문 것은 건드리지 않아야 한다.
+  assert.equal(jobs.find((job) => job.requestId === 'req-2').status, 'pending');
+  clearJobs(false);
 });
 
 test('발굴 설정은 대시보드로 그대로 내려간다', () => {

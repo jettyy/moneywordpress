@@ -17,8 +17,10 @@ const CUSTOM_MODEL = '__custom__';
 let state = {
   settings: null, site: null, jobs: [], runner: null,
   models: [], examples: [], rules: [], categories: [],
-  // 마지막으로 [주제 찾아보기] 로 받아온 후보들. 목록에 넣기 전까지만 들고 있는다.
+  // 마지막으로 [미리 보기만] 으로 받아온 후보들. 목록에 넣기 전까지만 들고 있는다.
   picks: [], history: null,
+  // 주문 대기열 (큰 주제 + 개수)
+  requests: [],
 };
 
 /* ---------- 공통 ---------- */
@@ -273,17 +275,25 @@ function renderRunner() {
   if (!runner) return;
   const { total, done, failed, skipped = 0, pending } = runner.stats;
 
-  // 진행률의 기준은 "몇 건을 임시저장하기로 했는가" 다.
-  // 목표가 있으면 그 목표를, 없으면 예전처럼 작업 목록 소진률을 보여준다.
+  // 진행률의 기준은 "지금 주문에서 몇 건을 임시저장했는가" 다.
+  // 주문이 없으면 예전처럼 작업 목록 소진률을 보여준다.
   const finished = done + failed + skipped;
   const percent = runner.goal
-    ? Math.round((runner.saved / runner.goal) * 100)
+    ? Math.round((runner.requestSaved / runner.goal) * 100)
     : (total ? Math.round((finished / total) * 100) : 0);
   $('progress-bar').style.width = `${Math.min(100, percent)}%`;
 
-  let text = runner.goal
-    ? `목표 ${runner.saved}/${runner.goal}건 임시저장`
-    : `전체 ${total}`;
+  // 돌고 있으면 지금 주문을, 아니면 대기열 전체를 보여준다.
+  const open = runner.requests?.open || 0;
+  let text;
+  if (runner.bigTopic) {
+    text = `"${runner.bigTopic}" ${runner.requestSaved}/${runner.goal}건`;
+    if (open > 1) text += ` · 대기열 ${open - 1}건 더`;
+  } else if (open) {
+    text = `대기열 ${open}건 · 앞으로 쓸 글 ${runner.requests.remaining}편`;
+  } else {
+    text = `전체 ${total}`;
+  }
   text += ` · 완료 ${done} · 실패 ${failed}`
     + `${skipped ? ` · 건너뜀 ${skipped}` : ''} · 대기 ${pending}`;
   if (runner.running) text += runner.paused ? ' · 일시정지' : ' · 실행 중';
@@ -294,9 +304,9 @@ function renderRunner() {
   }
   $('run-stats').textContent = text;
 
-  // 큰 주제가 있으면 대기 주제가 0건이어도 시작할 수 있다. 알아서 찾아오기 때문이다.
-  const canAutoStart = Boolean(state.settings?.discover?.bigTopic?.trim());
-  $('btn-start').disabled = runner.running || (pending === 0 && !canAutoStart);
+  // 대기열에 주문이 있으면 대기 주제가 0건이어도 시작할 수 있다. 알아서 찾아오기 때문이다.
+  const hasOrder = (runner.requests?.open || 0) > 0;
+  $('btn-start').disabled = runner.running || (pending === 0 && !hasOrder);
   $('btn-pause').disabled = !runner.running;
   $('btn-pause').textContent = runner.paused ? '이어서 실행' : '일시정지';
   $('btn-stop').disabled = !runner.running;
@@ -308,12 +318,15 @@ function renderSettings() {
   $('s-site-url').value = s.site.url || '';
   $('s-site-user').value = s.site.username || '';
 
-  if (document.activeElement !== $('s-big-topic')) $('s-big-topic').value = s.discover.bigTopic || '';
-  $('s-target-count').value = s.discover.targetCount;
+  // 큰 주제 칸은 화면이 새로 그려져도 건드리지 않는다. 치는 중일 수 있다.
+  if (document.activeElement !== $('s-target-count')) {
+    $('s-target-count').value = s.discover.targetCount;
+  }
   $('s-batch-size').value = s.discover.batchSize;
   $('s-recency').value = s.discover.recencyDays;
   $('s-min-score').value = s.discover.minScore;
   $('s-discover-searches').value = s.discover.maxSearches;
+  renderOrders();
   renderDiscoverState();
 
   $('s-research').checked = Boolean(s.research.enabled);
@@ -393,6 +406,12 @@ function connectStream() {
       if (index >= 0) state.jobs[index] = payload; else state.jobs.push(payload);
       renderJobs();
     } else if (type === 'runner') { state.runner = payload; renderRunner(); renderJobs(); }
+    else if (type === 'requests') {
+      state.requests = payload;
+      renderOrders();
+      renderDiscoverState();
+      renderRunner();
+    }
     else if (type === 'examples') { state.examples = payload; renderExamples(); }
     else if (type === 'site') { state.site = payload; renderSite(); }
   };
@@ -413,6 +432,7 @@ async function refreshState() {
     rules: data.rules || state.rules,
     examples: data.examples || [],
     history: data.history || state.history,
+    requests: data.requests || [],
   };
   renderRules();
   renderSettings();
@@ -554,42 +574,122 @@ $('category-select').addEventListener('change', async () => {
 
 /* ---------- 큰 주제 (주제 발굴) ---------- */
 
+const ORDER_LABEL = {
+  waiting: '대기',
+  running: '진행 중',
+  done: '완료',
+  failed: '중단',
+  stopped: '취소',
+};
+
 function renderDiscoverState() {
-  const big = state.settings?.discover?.bigTopic?.trim();
-  const count = state.settings?.discover?.targetCount || 0;
-  const written = state.history?.forTopic || 0;
-  $('discover-state').textContent = big
-    ? `"${big}" 로 ${count}건 임시저장${written ? ` · 지금까지 ${written}건 발굴함` : ''}`
-    : '큰 주제를 넣으면 최신 정보에서 글감을 찾아옵니다';
+  const open = (state.requests || []).filter((r) => r.status === 'waiting' || r.status === 'running');
+  const remaining = open.reduce((sum, r) => sum + Math.max(0, r.targetCount - r.saved), 0);
+  const written = state.history?.total || 0;
+  $('discover-state').textContent = open.length
+    ? `대기열 ${open.length}건 · 앞으로 쓸 글 ${remaining}편`
+    : `큰 주제를 넣고 [확인]을 누르세요${written ? ` · 지금까지 ${written}건 발굴함` : ''}`;
 }
 
-/** 큰 주제 칸의 값은 버튼을 누르지 않아도 저장한다. 실행할 때 다시 적지 않게. */
-let discoverTimer = null;
-function saveDiscover(immediate = false) {
-  clearTimeout(discoverTimer);
-  const run = async () => {
-    await patchSettings({
-      discover: {
-        bigTopic: $('s-big-topic').value.trim(),
-        targetCount: Number($('s-target-count').value) || 1,
-        batchSize: Number($('s-batch-size').value) || 5,
-        recencyDays: Number($('s-recency').value) || 30,
-        minScore: Number($('s-min-score').value) || 0,
-        maxSearches: Number($('s-discover-searches').value) || 6,
-      },
-    });
-    renderDiscoverState();
-    renderRunner();
-  };
-  if (immediate) run().catch((error) => toast(error.message));
-  else discoverTimer = setTimeout(() => run().catch((error) => toast(error.message)), 600);
+/** 대기열. 넣은 순서대로 처리되고, 아직 시작 안 한 것은 취소할 수 있다. */
+function renderOrders() {
+  const list = $('order-list');
+  const orders = state.requests || [];
+  if (!orders.length) {
+    list.innerHTML = '';
+    list.classList.add('hidden');
+    return;
+  }
+  list.classList.remove('hidden');
+  list.innerHTML = orders.map((order, index) => {
+    const label = ORDER_LABEL[order.status] || order.status;
+    const percent = order.targetCount
+      ? Math.min(100, Math.round((order.saved / order.targetCount) * 100)) : 0;
+    const failed = order.failed ? ` · 실패 ${order.failed}` : '';
+    return `<li class="order ${order.status}">
+      <span class="order-no">${index + 1}</span>
+      <span class="order-name">${escapeHtml(order.bigTopic)}</span>
+      <span class="order-badge ${order.status}">${label}</span>
+      <span class="order-progress"><span style="width:${percent}%"></span></span>
+      <span class="order-count-text">${order.saved}/${order.targetCount}${failed}</span>
+      <span class="order-msg" title="${escapeHtml(order.message || '')}">${escapeHtml(order.message || '')}</span>
+      <button class="btn ghost small danger" data-order-remove="${order.id}">취소</button>
+    </li>`;
+  }).join('');
 }
 
-$('s-big-topic').addEventListener('input', () => saveDiscover());
-$('s-big-topic').addEventListener('blur', () => saveDiscover(true));
+/** 발굴 세부 설정은 바뀌는 즉시 저장한다. */
+async function saveDiscoverSettings() {
+  await patchSettings({
+    discover: {
+      targetCount: Number($('s-target-count').value) || 1,
+      batchSize: Number($('s-batch-size').value) || 5,
+      recencyDays: Number($('s-recency').value) || 30,
+      minScore: Number($('s-min-score').value) || 0,
+      maxSearches: Number($('s-discover-searches').value) || 6,
+    },
+  });
+}
 for (const id of ['s-target-count', 's-batch-size', 's-recency', 's-min-score', 's-discover-searches']) {
-  $(id).addEventListener('change', () => saveDiscover(true));
+  $(id).addEventListener('change', () => saveDiscoverSettings().catch((e) => toast(e.message)));
 }
+
+/**
+ * [확인] — 대기열에 넣고 바로 입력칸을 비운다.
+ *
+ * 검색이 끝나기를 기다리지 않는다. 서버는 주문만 받아 두고 즉시 응답하고,
+ * 실제 검색은 실행 루프가 차례가 됐을 때 돌린다. 그래서 누르자마자
+ * 다음 주제를 이어서 넣을 수 있다.
+ */
+async function submitOrder() {
+  const input = $('s-big-topic');
+  const bigTopic = input.value.trim();
+  if (!bigTopic) return toast('큰 주제를 입력해 주세요.');
+
+  const targetCount = Number($('s-target-count').value) || 1;
+  // 응답을 기다리는 동안에도 다음 주제를 칠 수 있도록 먼저 비운다.
+  input.value = '';
+  input.focus();
+
+  try {
+    const data = await api('/api/requests', { method: 'POST', body: { bigTopic, targetCount } });
+    state.requests = data.requests || [];
+    renderOrders();
+    renderDiscoverState();
+    await refreshState();
+    toast(data.started
+      ? `"${bigTopic}" ${targetCount}건을 대기열에 넣고 시작했습니다.`
+      : `"${bigTopic}" 를 대기열에 넣었습니다. ${data.startMessage}`);
+  } catch (error) {
+    // 실패하면 친 내용을 돌려준다. 다시 타이핑하게 만들지 않는다.
+    if (!input.value) input.value = bigTopic;
+    toast(error.message);
+  }
+}
+
+$('btn-order').onclick = submitOrder;
+$('s-big-topic').addEventListener('keydown', (event) => {
+  if (event.key === 'Enter') { event.preventDefault(); submitOrder(); }
+});
+
+$('order-list').addEventListener('click', async (event) => {
+  const id = event.target.dataset.orderRemove;
+  if (!id) return;
+  const order = (state.requests || []).find((r) => r.id === id);
+  if (order?.status === 'running' && !confirm(`진행 중인 "${order.bigTopic}" 주문을 취소할까요?\n아직 쓰지 않은 주제는 건너뜀으로 정리됩니다.`)) return;
+  const data = await api(`/api/requests/${id}`, { method: 'DELETE' });
+  state.requests = data.requests || [];
+  renderOrders();
+  await refreshState();
+});
+
+$('btn-clear-orders').onclick = async () => {
+  const data = await api('/api/requests/clear', { method: 'POST', body: { onlyFinished: true } });
+  state.requests = data.requests || [];
+  renderOrders();
+  renderDiscoverState();
+  toast('끝난 주문을 정리했습니다.');
+};
 
 function renderPicks() {
   const list = $('pick-list');

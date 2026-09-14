@@ -15,6 +15,7 @@ export const LOG_DIR = path.join(DATA_DIR, 'logs');
 export const SETTINGS_FILE = path.join(DATA_DIR, 'settings.json');
 export const JOBS_FILE = path.join(DATA_DIR, 'jobs.json');
 export const HISTORY_FILE = path.join(DATA_DIR, 'topic-history.json');
+export const REQUESTS_FILE = path.join(DATA_DIR, 'requests.json');
 export const SITE_FILE = path.join(DATA_DIR, 'wp-site.json');
 export const IMAGE_MODEL_FILE = path.join(DATA_DIR, 'image-models.json');
 

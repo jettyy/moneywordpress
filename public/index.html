@@ -68,18 +68,26 @@
       <h2>2. 큰 주제 &amp; 임시저장 개수</h2>
       <span class="hint" id="discover-state">큰 주제를 넣으면 최신 정보에서 글감을 찾아옵니다</span>
     </div>
-    <div class="grid">
-      <label class="wide"><span class="label-line">큰 주제 <span class="tag-strong">이것만 넣으면 됩니다</span></span>
-        <input id="s-big-topic" type="text" spellcheck="false"
+    <div class="order-row">
+      <label class="order-topic"><span class="label-line">큰 주제 <span class="tag-strong">이것만 넣으면 됩니다</span></span>
+        <input id="s-big-topic" type="text" spellcheck="false" autocomplete="off"
           placeholder="예) 부동산 정책 · 국가 지원금 · 전기차 · 건강보험 · 자격증">
-        <span class="sub">이 주제와 관련된 <b>최신 정보</b>를 웹에서 찾아, 사람들이 가장 많이
-          찾아볼 만한 것으로 글 주제를 알아서 정합니다. 개별 글 제목을 적는 칸이 아닙니다</span>
       </label>
-      <label>임시저장할 개수
+      <label class="order-count">임시저장할 개수
         <input id="s-target-count" type="number" min="1" max="200">
-        <span class="sub">이만큼 <b>임시저장에 성공하면</b> 실행이 끝납니다.
-          실패하거나 건너뛴 주제는 세지 않습니다</span>
       </label>
+      <button class="btn primary order-go" id="btn-order">확인</button>
+    </div>
+    <p class="note tight">이 주제와 관련된 <b>최신 정보</b>를 웹에서 찾아, 사람들이 가장 많이
+      찾아볼 만한 것으로 글 주제를 알아서 정합니다. 개별 글 제목을 적는 칸이 아닙니다.<br>
+      <b>[확인]을 누르면 바로 대기열에 들어가고 입력칸이 비워집니다.</b>
+      검색이 도는 동안에도 다음 주제를 계속 넣을 수 있습니다. 넣은 순서대로 처리됩니다.
+      (Enter 키로도 됩니다)</p>
+
+    <ul class="order-list" id="order-list"></ul>
+
+    <div class="divider-line"></div>
+    <div class="grid">
       <label>한 번에 찾아올 주제 수
         <input id="s-batch-size" type="number" min="1" max="15">
         <span class="sub">주제가 떨어질 때마다 이만큼씩 새로 찾아옵니다.
@@ -100,8 +108,9 @@
       </label>
     </div>
     <div class="row">
-      <button class="btn" id="btn-discover">주제 찾아보기 (목록에 넣지 않고 확인만)</button>
+      <button class="btn" id="btn-discover">미리 보기만 (대기열에 넣지 않고 확인)</button>
       <button class="btn ghost small" id="btn-manual-toggle">직접 주제 추가</button>
+      <button class="btn ghost small" id="btn-clear-orders">끝난 주문 정리</button>
       <button class="btn ghost small danger" id="btn-clear-history">발굴 기록 지우기</button>
     </div>
     <div id="discover-result" class="test-result hidden"></div>
@@ -128,9 +137,9 @@
       </div>
     </div>
 
-    <p class="note">실행을 누르면 <b>큰 주제로 글감을 찾아 → 글을 쓰고 → 임시저장</b>하는 일을
-      정한 개수를 채울 때까지 반복합니다. 주제가 떨어지면 알아서 다시 찾아옵니다.
-      한 번 쓴 주제는 기록에 남아 다시 고르지 않습니다.<br>
+    <p class="note">주문 하나는 <b>큰 주제로 글감을 찾아 → 글을 쓰고 → 임시저장</b>하는 일을
+      정한 개수를 채울 때까지 반복합니다. 주제가 떨어지면 알아서 다시 찾아오고,
+      개수를 채우면 다음 주문으로 넘어갑니다. 한 번 쓴 주제는 기록에 남아 다시 고르지 않습니다.<br>
       찾아온 주제에 <b>TOP 5</b>, <b>7가지</b> 처럼 개수가 들어 있으면 항목마다
       <b>상세 설명 · 자격 요건 · 활용 분야 · 장단점 · 준비 팁</b>을 세부 소제목으로 나눠 씁니다.
       글의 형식과 썸네일 만드는 방식은 기존 애드센스 승인글 자동화와 똑같습니다.</p>

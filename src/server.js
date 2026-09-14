@@ -4,7 +4,12 @@ import { bus, recentLogs, logger, logRaw, logFile } from './lib/events.js';
 import {
   getSettings, saveSettings, publicSettings, DEFAULT_SETTINGS,
 } from './lib/settings.js';
-import { listJobs, addTopics, removeJob, clearJobs, resetJob, stats, STATUS } from './lib/store.js';
+import {
+  listJobs, addTopics, removeJob, clearJobs, resetJob, stats, STATUS, cancelPendingJobs,
+} from './lib/store.js';
+import {
+  listRequests, addRequest, getRequest, removeRequest, clearRequests,
+} from './lib/requests.js';
 import { parseTopics, normalizeSiteUrl } from './lib/util.js';
 import {
   verifyConnection, readSiteInfo, disconnect, listCategories,
@@ -53,6 +58,7 @@ app.get('/api/state', wrap(async (req, res) => {
     examples: listExamples(),
     site: readSiteInfo(),
     jobs: listJobs(),
+    requests: listRequests(),
     runner: runner.getRunnerState(),
     logs: recentLogs(),
     statuses: STATUS,
@@ -123,6 +129,59 @@ app.post('/api/site/disconnect', wrap(async (req, res) => {
 
 app.get('/api/site/categories', wrap(async (req, res) => {
   res.json({ ok: true, categories: await listCategories() });
+}));
+
+/* ---------- 주문 대기열 (큰 주제 + 개수) ---------- */
+
+/**
+ * 큰 주제 하나를 대기열에 넣는다.
+ *
+ * **검색을 기다리지 않고 바로 응답한다.** 실제 검색은 실행 루프가 차례가 됐을 때
+ * 돌린다. 그래야 [확인] 을 누른 사람이 곧바로 다음 주제를 입력할 수 있다.
+ */
+app.post('/api/requests', wrap(async (req, res) => {
+  const bigTopic = String(req.body?.bigTopic || '').trim();
+  if (!bigTopic) {
+    res.status(400).json({ ok: false, message: '큰 주제를 입력해 주세요.' });
+    return;
+  }
+  const targetCount = Number(req.body?.targetCount) || getSettings().discover.targetCount;
+  const request = addRequest({ bigTopic, targetCount });
+
+  // 다음에 열었을 때 같은 개수가 그대로 있도록 기본값만 기억해 둔다.
+  saveSettings({ discover: { targetCount: request.targetCount } });
+  logger.info(`주문 추가 — "${request.bigTopic}" ${request.targetCount}건`);
+
+  // 워드프레스가 연결돼 있으면 바로 돌기 시작한다. [실행] 을 또 누를 필요가 없다.
+  const started = runner.ensureRunning();
+  if (!started.ok) {
+    logger.warn(`대기열에 넣었지만 아직 실행하지 못합니다: ${started.message}`);
+  }
+
+  res.json({
+    ok: true,
+    request,
+    requests: listRequests(),
+    started: started.ok,
+    startMessage: started.ok ? '' : started.message,
+  });
+}));
+
+app.delete('/api/requests/:id', wrap(async (req, res) => {
+  const request = getRequest(req.params.id);
+  if (request) {
+    // 아직 안 쓴 주제까지 같이 걷어낸다. 주문만 지우면 주제가 남아서 계속 써진다.
+    const left = cancelPendingJobs(request.id, '주문을 취소해 쓰지 않았습니다.');
+    removeRequest(request.id);
+    logger.info(
+      `주문 취소 — "${request.bigTopic}"${left ? ` (대기 주제 ${left}건 정리)` : ''}`,
+    );
+  }
+  res.json({ ok: true, requests: listRequests(), jobs: listJobs() });
+}));
+
+app.post('/api/requests/clear', wrap(async (req, res) => {
+  res.json({ ok: true, requests: clearRequests(req.body?.onlyFinished !== false) });
 }));
 
 /* ---------- 주제 발굴 (큰 주제 → 최신 정보 → 글 주제) ---------- */
