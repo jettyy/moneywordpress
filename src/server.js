@@ -8,9 +8,9 @@ import {
   listJobs, addTopics, removeJob, clearJobs, resetJob, stats, STATUS, cancelPendingJobs,
 } from './lib/store.js';
 import {
-  listRequests, addRequest, getRequest, removeRequest, clearRequests,
+  listRequests, addRequest, getRequest, removeRequest, clearRequests, isOpen,
 } from './lib/requests.js';
-import { parseTopics, normalizeSiteUrl } from './lib/util.js';
+import { parseTopics, parseBigTopics, normalizeSiteUrl } from './lib/util.js';
 import {
   verifyConnection, readSiteInfo, disconnect, listCategories,
 } from './wordpress/client.js';
@@ -20,7 +20,7 @@ import { MODELS } from './ai/models.js';
 import { RULES } from './content/adsense.js';
 import { runResearch, isUsableUrl } from './content/research.js';
 import { discoverTopics } from './content/discover.js';
-import { recordTopics, historyStats, clearHistory } from './lib/history.js';
+import { recordTopics, historyStats, clearHistory, topicKey } from './lib/history.js';
 import {
   generateBackground, pickAspectRatio, getImageModels, verifyKoreanText,
 } from './content/imagegen.js';
@@ -161,6 +161,63 @@ app.post('/api/requests', wrap(async (req, res) => {
   res.json({
     ok: true,
     request,
+    requests: listRequests(),
+    started: started.ok,
+    startMessage: started.ok ? '' : started.message,
+  });
+}));
+
+/** 여러 줄을 붙여넣었을 때 몇 건으로 인식되는지 미리 보여준다. */
+app.post('/api/requests/bulk/preview', wrap(async (req, res) => {
+  const parsed = parseBigTopics(req.body?.raw || '');
+  res.json({ ok: true, count: parsed.length, topics: parsed.slice(0, 100) });
+}));
+
+/**
+ * 큰 주제를 여러 줄 붙여넣어 한꺼번에 대기열에 넣는다.
+ *
+ * 한 줄이 주문 하나다. 줄마다 [확인] 을 누르는 것과 결과가 같다.
+ * 다만 스무 줄을 붙여넣는 상황이라 실수로 겹친 줄이 그대로 들어가면
+ * 같은 주제로 글이 두 배로 나온다. 이미 대기열에 있는 주제는 빼고 넣는다.
+ * (하나씩 넣을 때는 "5편 더" 라는 뜻일 수 있어 막지 않는다)
+ */
+app.post('/api/requests/bulk', wrap(async (req, res) => {
+  const parsed = parseBigTopics(req.body?.raw || '');
+  if (!parsed.length) {
+    res.status(400).json({ ok: false, message: '큰 주제를 한 줄에 하나씩 붙여넣어 주세요.' });
+    return;
+  }
+
+  const fallback = Math.max(1, Math.min(200, Number(req.body?.targetCount) || 0))
+    || getSettings().discover.targetCount;
+
+  const queued = new Set(listRequests().filter(isOpen).map((r) => topicKey(r.bigTopic)));
+  const added = [];
+  const duplicates = [];
+
+  for (const item of parsed) {
+    const key = topicKey(item.bigTopic);
+    if (queued.has(key)) { duplicates.push(item.bigTopic); continue; }
+    queued.add(key);
+    added.push(addRequest({
+      bigTopic: item.bigTopic,
+      targetCount: item.targetCount || fallback,
+    }));
+  }
+
+  saveSettings({ discover: { targetCount: fallback } });
+  logger.info(
+    `주문 ${added.length}건을 한꺼번에 추가했습니다. (붙여넣기 ${parsed.length}줄`
+    + `${duplicates.length ? `, 이미 대기열에 있는 ${duplicates.length}건 제외` : ''})`,
+  );
+
+  const started = runner.ensureRunning();
+  if (!started.ok) logger.warn(`대기열에 넣었지만 아직 실행하지 못합니다: ${started.message}`);
+
+  res.json({
+    ok: true,
+    added: added.length,
+    duplicates,
     requests: listRequests(),
     started: started.ok,
     startMessage: started.ok ? '' : started.message,

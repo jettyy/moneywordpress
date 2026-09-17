@@ -33,7 +33,7 @@ import {
 import {
   addTopics, nextPending, cancelPendingJobs, listJobs, clearJobs,
 } from '../src/lib/store.js';
-import { normalizeSiteUrl, normalizeSlug, parseTopics } from '../src/lib/util.js';
+import { normalizeSiteUrl, normalizeSlug, parseTopics, parseBigTopics } from '../src/lib/util.js';
 
 const settings = structuredClone(DEFAULT_SETTINGS);
 
@@ -762,6 +762,50 @@ test('대기열에 남은 글 편수를 센다', () => {
   updateRequest(second.id, { saved: 2 });
   assert.deepEqual(requestStats(), { total: 2, open: 2, remaining: 6 });
   clearRequests(false);
+});
+
+test('여러 줄을 붙여넣으면 한 줄이 주문 하나가 된다', () => {
+  const parsed = parseBigTopics(`대학 입결 순위
+
+대기업 평균 연봉 순위
+
+전문직 소득 순위`);
+  assert.deepEqual(parsed.map((item) => item.bigTopic), [
+    '대학 입결 순위', '대기업 평균 연봉 순위', '전문직 소득 순위',
+  ]);
+  // 개수를 안 적었으면 0. 서버가 기본값으로 채운다.
+  assert.deepEqual(parsed.map((item) => item.targetCount), [0, 0, 0]);
+});
+
+test('목록 기호와 번호를 떼어낸다', () => {
+  // 그대로 두면 큰 주제에 "1." 이 붙은 채로 검색된다.
+  const parsed = parseBigTopics('- 대학 서열\n1. 시가총액 순위\n2) 의대 입결 순위\n• 공기업 연봉 순위');
+  assert.deepEqual(parsed.map((item) => item.bigTopic), [
+    '대학 서열', '시가총액 순위', '의대 입결 순위', '공기업 연봉 순위',
+  ]);
+});
+
+test('붙여넣기 안에서 겹치는 줄과 머리글을 버린다', () => {
+  const parsed = parseBigTopics('큰 주제\n대학 서열\n대학  서열\n대학 서열\n\n시가총액 순위');
+  assert.deepEqual(parsed.map((item) => item.bigTopic), ['대학 서열', '시가총액 순위']);
+});
+
+test('엑셀 두 번째 열에 적은 개수를 그 줄에만 쓴다', () => {
+  const parsed = parseBigTopics('대학 서열\t3\n시가총액 순위\n의대 입결 순위\t999');
+  assert.deepEqual(parsed.map((item) => item.targetCount), [3, 0, 200]);
+});
+
+test('빈 줄만 붙여넣으면 아무 것도 안 만든다', () => {
+  assert.deepEqual(parseBigTopics('\n\n   \n'), []);
+  assert.deepEqual(parseBigTopics(''), []);
+});
+
+test('글 주제 파서와 큰 주제 파서를 섞지 않는다', () => {
+  // 한 줄이 글 하나(parseTopics)냐 주문 하나(parseBigTopics)냐가 다르다.
+  // 섞이면 20줄을 붙여넣었다가 200편이 걸린다.
+  const raw = '1. 대학 서열\n대학 서열';
+  assert.deepEqual(parseTopics(raw), ['1. 대학 서열', '대학 서열'], '글 주제는 기호를 남긴다');
+  assert.deepEqual(parseBigTopics(raw).map((i) => i.bigTopic), ['대학 서열'], '큰 주제는 기호를 떼고 합친다');
 });
 
 test('같은 큰 주제를 두 번 넣을 수 있다', () => {

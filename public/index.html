@@ -84,6 +84,23 @@
       검색이 도는 동안에도 다음 주제를 계속 넣을 수 있습니다. 넣은 순서대로 처리됩니다.
       (Enter 키로도 됩니다)</p>
 
+    <div class="row">
+      <button class="btn ghost small" id="btn-bulk-toggle">여러 개 한 번에 붙여넣기</button>
+    </div>
+
+    <div id="bulk-box" class="hidden">
+      <textarea id="bulk-topics" rows="8" spellcheck="false"
+        placeholder="큰 주제를 한 줄에 하나씩 붙여넣으세요. 줄 사이에 빈 줄이 있어도 됩니다.&#10;&#10;예)&#10;대학 입결 순위&#10;대기업 평균 연봉 순위&#10;전문직 소득 순위&#10;공기업 연봉 순위&#10;&#10;- 목록 기호(-)나 번호(1.)가 붙어 있어도 알아서 떼어냅니다.&#10;- 엑셀에서 두 번째 열에 개수를 적어 두면 그 줄만 그 개수로 들어갑니다."></textarea>
+      <div class="row">
+        <button class="btn primary" id="btn-bulk-add">전부 대기열에 넣기</button>
+        <span class="hint" id="bulk-count">0개 인식</span>
+        <button class="btn ghost" id="btn-bulk-clear">입력 지우기</button>
+      </div>
+      <p class="note tight"><b>한 줄이 주문 하나</b>입니다. 위 [임시저장할 개수] 가 모든 줄에
+        똑같이 적용되므로, 20줄에 10건이면 <b>글 200편</b>이 걸립니다. 숫자를 먼저 확인하세요.<br>
+        이미 대기열에 있는 주제는 빼고 넣습니다.</p>
+    </div>
+
     <ul class="order-list" id="order-list"></ul>
 
     <div class="divider-line"></div>

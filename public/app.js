@@ -672,6 +672,81 @@ $('s-big-topic').addEventListener('keydown', (event) => {
   if (event.key === 'Enter') { event.preventDefault(); submitOrder(); }
 });
 
+/* 여러 개 한 번에 붙여넣기 — 한 줄이 주문 하나. */
+
+$('btn-bulk-toggle').onclick = () => {
+  const box = $('bulk-box');
+  box.classList.toggle('hidden');
+  const open = !box.classList.contains('hidden');
+  $('btn-bulk-toggle').textContent = open ? '여러 개 붙여넣기 닫기' : '여러 개 한 번에 붙여넣기';
+  if (open) $('bulk-topics').focus();
+};
+
+/**
+ * 몇 줄로 인식되는지, 글이 몇 편 걸리는지 미리 보여준다.
+ *
+ * 20줄에 10건이면 200편이다. 넣고 나서 알면 늦으니 누르기 전에 보여준다.
+ */
+let bulkTimer = null;
+$('bulk-topics').addEventListener('input', () => {
+  clearTimeout(bulkTimer);
+  bulkTimer = setTimeout(async () => {
+    try {
+      const data = await api('/api/requests/bulk/preview', {
+        method: 'POST', body: { raw: $('bulk-topics').value },
+      });
+      const each = Number($('s-target-count').value) || 1;
+      // 줄마다 개수를 따로 적었으면 그 값을, 아니면 위 칸의 값을 쓴다.
+      const posts = data.topics.reduce((sum, item) => sum + (item.targetCount || each), 0);
+      $('bulk-count').textContent = data.count
+        ? `${data.count}개 인식 · 글 ${posts}편`
+        : '0개 인식';
+    } catch {
+      $('bulk-count').textContent = '0개 인식';
+    }
+  }, 250);
+});
+
+$('btn-bulk-clear').onclick = () => {
+  $('bulk-topics').value = '';
+  $('bulk-count').textContent = '0개 인식';
+};
+
+$('btn-bulk-add').onclick = async () => {
+  const raw = $('bulk-topics').value;
+  if (!raw.trim()) return toast('큰 주제를 붙여넣어 주세요.');
+
+  const targetCount = Number($('s-target-count').value) || 1;
+  const preview = await api('/api/requests/bulk/preview', { method: 'POST', body: { raw } });
+  const posts = preview.topics.reduce((sum, item) => sum + (item.targetCount || targetCount), 0);
+  if (!confirm(
+    `큰 주제 ${preview.count}개를 대기열에 넣습니다.\n`
+    + `글은 모두 ${posts}편이 걸립니다. (한 주제당 ${targetCount}건)\n\n`
+    + '진행할까요?',
+  )) return;
+
+  const button = $('btn-bulk-add');
+  button.disabled = true;
+  try {
+    const data = await api('/api/requests/bulk', { method: 'POST', body: { raw, targetCount } });
+    state.requests = data.requests || [];
+    $('bulk-topics').value = '';
+    $('bulk-count').textContent = '0개 인식';
+    renderOrders();
+    renderDiscoverState();
+    await refreshState();
+    const dup = data.duplicates?.length
+      ? ` (이미 대기열에 있는 ${data.duplicates.length}건 제외)` : '';
+    toast(data.started
+      ? `${data.added}건을 대기열에 넣고 시작했습니다.${dup}`
+      : `${data.added}건을 대기열에 넣었습니다.${dup} ${data.startMessage}`);
+  } catch (error) {
+    toast(error.message);
+  } finally {
+    button.disabled = false;
+  }
+};
+
 $('order-list').addEventListener('click', async (event) => {
   const id = event.target.dataset.orderRemove;
   if (!id) return;
