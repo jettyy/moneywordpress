@@ -270,6 +270,14 @@ td.model-cell { font-size: 12px; color: var(--muted); white-space: nowrap; }
 #bulk-topics { font-size: 13.5px; }
 #bulk-count { font-weight: 600; color: var(--wp); }
 
+/* 대기열 위의 지우기 줄. 목록이 있을 때만 보인다. */
+.order-tools {
+  display: flex; align-items: center; justify-content: space-between;
+  gap: 10px; flex-wrap: wrap; margin: 14px 0 -2px;
+}
+.order-tool-buttons { display: flex; gap: 6px; flex-wrap: wrap; }
+.order-tools .btn[disabled] { opacity: .4; cursor: default; }
+
 .order-list { list-style: none; margin: 12px 0 0; padding: 0; }
 .order-list li {
   display: flex; align-items: center; gap: 10px;

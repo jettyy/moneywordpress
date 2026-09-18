@@ -101,6 +101,14 @@
         이미 대기열에 있는 주제는 빼고 넣습니다.</p>
     </div>
 
+    <div class="order-tools hidden" id="order-tools">
+      <span class="hint" id="order-summary"></span>
+      <span class="order-tool-buttons">
+        <button class="btn ghost small" id="btn-clear-orders">끝난 주문 정리</button>
+        <button class="btn ghost small" id="btn-clear-waiting">대기 중인 것 비우기</button>
+        <button class="btn ghost small danger" id="btn-clear-all-orders">전체 비우기</button>
+      </span>
+    </div>
     <ul class="order-list" id="order-list"></ul>
 
     <div class="divider-line"></div>
@@ -127,7 +135,6 @@
     <div class="row">
       <button class="btn" id="btn-discover">미리 보기만 (대기열에 넣지 않고 확인)</button>
       <button class="btn ghost small" id="btn-manual-toggle">직접 주제 추가</button>
-      <button class="btn ghost small" id="btn-clear-orders">끝난 주문 정리</button>
       <button class="btn ghost small danger" id="btn-clear-history">발굴 기록 지우기</button>
     </div>
     <div id="discover-result" class="test-result hidden"></div>

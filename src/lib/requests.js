@@ -118,11 +118,36 @@ export function removeRequest(id) {
   return requests;
 }
 
-export function clearRequests(onlyFinished = true) {
-  requests = onlyFinished ? load().filter(isOpen) : [];
+/**
+ * 주문을 한꺼번에 지운다.
+ *
+ * 스무 개를 걸어놓고 마음이 바뀌면 [취소]를 스무 번 눌러야 하니 범위를 나눠 둔다.
+ *   finished — 이미 끝난 것만 (기본). 표를 정리하는 용도라 되돌릴 게 없다
+ *   waiting  — 아직 시작 안 한 것만. **진행 중인 주문은 남긴다.**
+ *              쓰고 있던 글까지 버리지 않고 "이번 것까지만 하고 그만" 할 때 쓴다
+ *   all      — 전부
+ *
+ * 지워진 주문에 딸린 대기 주제는 부르는 쪽에서 따로 정리한다. 여기는
+ * 주문 목록만 안다. (작업 목록까지 건드리면 두 파일이 서로를 물게 된다)
+ *
+ * @returns {{requests: object[], removed: object[]}} removed 는 실제로 지워진 주문
+ */
+export function clearRequests(scope = 'finished') {
+  const list = load();
+  const keep = [];
+  const removed = [];
+
+  for (const request of list) {
+    const drop = scope === 'all'
+      || (scope === 'finished' && !isOpen(request))
+      || (scope === 'waiting' && request.status === REQUEST_STATUS.WAITING);
+    (drop ? removed : keep).push(request);
+  }
+
+  requests = keep;
   persist();
   broadcast();
-  return requests;
+  return { requests: keep, removed };
 }
 
 export function requestStats() {

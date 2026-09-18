@@ -237,8 +237,30 @@ app.delete('/api/requests/:id', wrap(async (req, res) => {
   res.json({ ok: true, requests: listRequests(), jobs: listJobs() });
 }));
 
+/**
+ * 주문을 한꺼번에 지운다. scope: finished(기본) · waiting · all
+ *
+ * 주문만 지우면 그 주문이 데려온 대기 주제가 작업 목록에 남아 계속 써진다.
+ * 지운 주문마다 남은 주제도 같이 걷어낸다. (하나씩 [취소] 할 때와 같은 처리)
+ */
 app.post('/api/requests/clear', wrap(async (req, res) => {
-  res.json({ ok: true, requests: clearRequests(req.body?.onlyFinished !== false) });
+  const scopes = ['finished', 'waiting', 'all'];
+  const scope = scopes.includes(req.body?.scope) ? req.body.scope : 'finished';
+
+  const { requests, removed } = clearRequests(scope);
+  let cleared = 0;
+  for (const request of removed) {
+    cleared += cancelPendingJobs(request.id, '주문을 지워서 쓰지 않았습니다.');
+  }
+
+  if (removed.length) {
+    const label = { finished: '끝난 주문', waiting: '대기 중인 주문', all: '주문' }[scope];
+    logger.info(
+      `${label} ${removed.length}건을 지웠습니다.`
+      + `${cleared ? ` (대기 주제 ${cleared}건 정리)` : ''}`,
+    );
+  }
+  res.json({ ok: true, removed: removed.length, cleared, requests, jobs: listJobs() });
 }));
 
 /* ---------- 주제 발굴 (큰 주제 → 최신 정보 → 글 주제) ---------- */

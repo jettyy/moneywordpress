@@ -594,13 +594,24 @@ function renderDiscoverState() {
 /** 대기열. 넣은 순서대로 처리되고, 아직 시작 안 한 것은 취소할 수 있다. */
 function renderOrders() {
   const list = $('order-list');
+  const tools = $('order-tools');
   const orders = state.requests || [];
   if (!orders.length) {
     list.innerHTML = '';
     list.classList.add('hidden');
+    tools.classList.add('hidden');
     return;
   }
   list.classList.remove('hidden');
+
+  // 지우기 버튼은 지울 것이 있을 때만 켠다. 눌러도 아무 일 없는 버튼은 없는 편이 낫다.
+  const waiting = orders.filter((o) => o.status === 'waiting').length;
+  const finished = orders.filter((o) => !['waiting', 'running'].includes(o.status)).length;
+  tools.classList.remove('hidden');
+  $('order-summary').textContent =
+    `주문 ${orders.length}건 (대기 ${waiting}${finished ? ` · 끝남 ${finished}` : ''})`;
+  $('btn-clear-orders').disabled = !finished;
+  $('btn-clear-waiting').disabled = !waiting;
   list.innerHTML = orders.map((order, index) => {
     const label = ORDER_LABEL[order.status] || order.status;
     const percent = order.targetCount
@@ -758,12 +769,48 @@ $('order-list').addEventListener('click', async (event) => {
   await refreshState();
 });
 
-$('btn-clear-orders').onclick = async () => {
-  const data = await api('/api/requests/clear', { method: 'POST', body: { onlyFinished: true } });
+/**
+ * 주문 일괄 지우기.
+ *
+ * 스무 개를 걸어놓고 하나씩 [취소] 하는 것이 제일 번거롭다.
+ * 범위를 셋으로 나눠 두었고, 되돌릴 수 없는 쪽만 확인창을 띄운다.
+ */
+async function clearOrders(scope, confirmText) {
+  if (confirmText && !confirm(confirmText)) return;
+  const data = await api('/api/requests/clear', { method: 'POST', body: { scope } });
   state.requests = data.requests || [];
   renderOrders();
   renderDiscoverState();
-  toast('끝난 주문을 정리했습니다.');
+  await refreshState();
+  toast(data.removed
+    ? `주문 ${data.removed}건을 지웠습니다.${data.cleared ? ` (대기 주제 ${data.cleared}건 정리)` : ''}`
+    : '지울 주문이 없습니다.');
+}
+
+// 끝난 것만 지우는 건 되돌릴 게 없다. 바로 지운다.
+$('btn-clear-orders').onclick = () => clearOrders('finished');
+
+$('btn-clear-waiting').onclick = () => {
+  const waiting = (state.requests || []).filter((o) => o.status === 'waiting');
+  const posts = waiting.reduce((sum, o) => sum + Math.max(0, o.targetCount - o.saved), 0);
+  clearOrders(
+    'waiting',
+    `아직 시작하지 않은 주문 ${waiting.length}건을 지웁니다. (글 ${posts}편)\n`
+    + '진행 중인 주문은 그대로 두고 그것까지만 마칩니다.\n\n지울까요?',
+  );
+};
+
+$('btn-clear-all-orders').onclick = () => {
+  const orders = state.requests || [];
+  const running = orders.filter((o) => o.status === 'running').length;
+  clearOrders(
+    'all',
+    `대기열의 주문 ${orders.length}건을 모두 지웁니다.\n`
+    + (running
+      ? '진행 중인 주문도 지워집니다. 지금 쓰고 있는 글 한 편은 마치고 멈춥니다.\n'
+      : '')
+    + '이미 임시저장된 글은 워드프레스에 그대로 남습니다.\n\n지울까요?',
+  );
 };
 
 function renderPicks() {

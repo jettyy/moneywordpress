@@ -731,7 +731,7 @@ test('개수가 적은 주문도 발굴 상한이 너무 빡빡하지 않다', (
 /* ---------- 주문 대기열 ---------- */
 
 test('주문을 넣은 순서대로 하나씩 꺼낸다', () => {
-  clearRequests(false);
+  clearRequests('all');
   const first = addRequest({ bigTopic: '전기차', targetCount: 3 });
   const second = addRequest({ bigTopic: '부동산', targetCount: 2 });
 
@@ -743,25 +743,25 @@ test('주문을 넣은 순서대로 하나씩 꺼낸다', () => {
 
   finishRequest(second.id, REQUEST_STATUS.DONE);
   assert.equal(nextRequest(), null, '다 끝나면 꺼낼 주문이 없어야 합니다');
-  clearRequests(false);
+  clearRequests('all');
 });
 
 test('개수는 1 이상으로 맞춰 들어간다', () => {
-  clearRequests(false);
+  clearRequests('all');
   assert.equal(addRequest({ bigTopic: '전기차', targetCount: 0 }).targetCount, 1);
   assert.equal(addRequest({ bigTopic: '전기차', targetCount: -3 }).targetCount, 1);
   assert.equal(addRequest({ bigTopic: '전기차', targetCount: 9999 }).targetCount, 200);
   assert.throws(() => addRequest({ bigTopic: '  ' }), /큰 주제/);
-  clearRequests(false);
+  clearRequests('all');
 });
 
 test('대기열에 남은 글 편수를 센다', () => {
-  clearRequests(false);
+  clearRequests('all');
   addRequest({ bigTopic: '전기차', targetCount: 5 });
   const second = addRequest({ bigTopic: '부동산', targetCount: 3 });
   updateRequest(second.id, { saved: 2 });
   assert.deepEqual(requestStats(), { total: 2, open: 2, remaining: 6 });
-  clearRequests(false);
+  clearRequests('all');
 });
 
 test('여러 줄을 붙여넣으면 한 줄이 주문 하나가 된다', () => {
@@ -808,13 +808,67 @@ test('글 주제 파서와 큰 주제 파서를 섞지 않는다', () => {
   assert.deepEqual(parseBigTopics(raw).map((i) => i.bigTopic), ['대학 서열'], '큰 주제는 기호를 떼고 합친다');
 });
 
+test('끝난 주문만 골라 지운다', () => {
+  clearRequests('all');
+  const done = addRequest({ bigTopic: '끝난 것', targetCount: 1 });
+  const running = addRequest({ bigTopic: '도는 것', targetCount: 1 });
+  addRequest({ bigTopic: '기다리는 것', targetCount: 1 });
+  finishRequest(done.id, REQUEST_STATUS.DONE);
+  updateRequest(running.id, { status: REQUEST_STATUS.RUNNING });
+
+  const { requests, removed } = clearRequests('finished');
+  assert.deepEqual(removed.map((r) => r.bigTopic), ['끝난 것']);
+  assert.deepEqual(requests.map((r) => r.bigTopic), ['도는 것', '기다리는 것']);
+  clearRequests('all');
+});
+
+test('대기 중인 것만 비우면 진행 중인 주문은 남는다', () => {
+  // "이번 것까지만 하고 그만" 할 때 쓴다. 쓰고 있던 글까지 버리면 안 된다.
+  clearRequests('all');
+  const running = addRequest({ bigTopic: '도는 것', targetCount: 1 });
+  addRequest({ bigTopic: '기다리는 것 1', targetCount: 1 });
+  addRequest({ bigTopic: '기다리는 것 2', targetCount: 1 });
+  updateRequest(running.id, { status: REQUEST_STATUS.RUNNING });
+
+  const { requests, removed } = clearRequests('waiting');
+  assert.equal(removed.length, 2);
+  assert.deepEqual(requests.map((r) => r.bigTopic), ['도는 것']);
+  assert.equal(nextRequest().bigTopic, '도는 것', '진행 중인 주문이 계속 돌아야 합니다');
+  clearRequests('all');
+});
+
+test('전체 비우기는 진행 중인 것까지 지운다', () => {
+  clearRequests('all');
+  const running = addRequest({ bigTopic: '도는 것', targetCount: 1 });
+  addRequest({ bigTopic: '기다리는 것', targetCount: 1 });
+  updateRequest(running.id, { status: REQUEST_STATUS.RUNNING });
+
+  const { requests, removed } = clearRequests('all');
+  assert.equal(removed.length, 2);
+  assert.deepEqual(requests, []);
+  assert.equal(nextRequest(), null);
+});
+
+test('지운 주문의 대기 주제도 걷어낼 수 있다', () => {
+  // 주문만 지우고 주제를 두면 작업 목록에 남아 계속 써진다.
+  clearJobs(false);
+  addTopics([{ topic: '지워질 주문의 주제입니다' }], 'gone-1');
+  addTopics([{ topic: '남아야 하는 주문의 주제입니다' }], 'keep-1');
+
+  assert.equal(cancelPendingJobs('gone-1', '주문을 지워서 쓰지 않았습니다.'), 1);
+  const jobs = listJobs();
+  assert.equal(jobs.find((j) => j.requestId === 'gone-1').status, 'skipped');
+  assert.equal(jobs.find((j) => j.requestId === 'keep-1').status, 'pending');
+  clearJobs(false);
+});
+
 test('같은 큰 주제를 두 번 넣을 수 있다', () => {
   // "5편 더 뽑아줘" 는 정상적인 요구다. 중복으로 막으면 안 된다.
-  clearRequests(false);
+  clearRequests('all');
   addRequest({ bigTopic: '전기차', targetCount: 5 });
   addRequest({ bigTopic: '전기차', targetCount: 5 });
   assert.equal(requestStats().open, 2);
-  clearRequests(false);
+  clearRequests('all');
 });
 
 test('발굴한 주제는 그 주문의 몫으로 붙는다', () => {
