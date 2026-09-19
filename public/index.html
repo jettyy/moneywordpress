@@ -113,6 +113,14 @@
 
     <div class="divider-line"></div>
     <div class="grid">
+      <label class="wide check"><input id="s-auto-continue" type="checkbox"> 대기열이 비면 큰 주제를 알아서 이어 붙이기
+        <span class="sub">지금까지 쓴 큰 주제와 <b>결이 이어지는</b> 분야를 AI가 새로 골라 대기열에 넣습니다.
+          주제를 넣어 주지 않아도 계속 씁니다. 켜 두면 <b>대기열이 텅 비어 있어도 [실행]이 됩니다.</b>
+          멈추지 않으니 사용량과 임시저장 개수를 가끔 확인하세요</span></label>
+      <label>한 번에 이어 붙일 큰 주제 수
+        <input id="s-auto-batch" type="number" min="1" max="5">
+        <span class="sub">대기열이 빌 때마다 이만큼씩 새로 골라 붙입니다</span>
+      </label>
       <label>한 번에 찾아올 주제 수
         <input id="s-batch-size" type="number" min="1" max="15">
         <span class="sub">주제가 떨어질 때마다 이만큼씩 새로 찾아옵니다.

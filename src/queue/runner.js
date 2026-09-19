@@ -5,9 +5,10 @@ import {
 } from '../lib/store.js';
 import {
   REQUEST_STATUS, nextRequest, updateRequest, finishRequest, getRequest, requestStats,
+  addRequest,
 } from '../lib/requests.js';
 import { getSettings } from '../lib/settings.js';
-import { discoverTopics } from '../content/discover.js';
+import { discoverTopics, suggestBigTopics } from '../content/discover.js';
 import { recordTopics } from '../lib/history.js';
 import { generatePost, countChars } from '../content/generator.js';
 import { summarize } from '../content/adsense.js';
@@ -286,11 +287,16 @@ export const discoverCapFor = (request) => Math.max(10, (request?.targetCount ||
  * 판단만 따로 떼어 놓고 자체 점검에서 확인한다.
  *
  * @param {object|null} request  지금 처리 중인 주문 (없으면 null)
- * @returns {'process'|'discover'|'finish-request'|'give-up-request'|'stop-empty'}
+ * @param {boolean} autoContinue 대기열이 비면 큰 주제를 알아서 이어 붙일지
+ * @returns {'process'|'discover'|'finish-request'|'give-up-request'|'auto-topic'|'stop-empty'}
  */
-export function planNextStep({ hasPending, request }) {
-  // 주문이 없으면 손으로 넣은 주제만 쓰고 끝낸다. (예전 방식)
-  if (!request) return hasPending ? 'process' : 'stop-empty';
+export function planNextStep({ hasPending, request, autoContinue = false }) {
+  if (!request) {
+    if (hasPending) return 'process';
+    // 이어 붙이기가 켜져 있으면 대기열이 비어도 끝내지 않는다.
+    // 새 큰 주제를 골라 와서 계속 쓴다.
+    return autoContinue ? 'auto-topic' : 'stop-empty';
+  }
 
   // 목표를 채웠다. 넉넉히 받아 둔 주제가 남아 있어도 여기서 이 주문을 닫는다.
   // 그래야 다음 주문으로 넘어간다.
@@ -304,6 +310,34 @@ export function planNextStep({ hasPending, request }) {
   return 'discover';
 }
 
+/**
+ * 사용량 한도에 걸렸을 때.
+ *
+ * 예전에는 일시정지하고 사람이 [이어서 실행] 을 누르기를 기다렸다. 자는 동안
+ * 한도에 걸리면 아침까지 멈춰 있다는 뜻이다. "이어 붙이기" 가 켜져 있으면
+ * 멈추는 대신 정해진 시간만큼 쉬었다가 알아서 다시 시작한다.
+ *
+ * 꺼져 있으면 예전처럼 일시정지한다. 사람이 보고 있다는 뜻이기 때문이다.
+ */
+async function coolDown(reason) {
+  const settings = getSettings();
+  if (!settings.discover.autoContinue) {
+    state.paused = true;
+    logger.error(`${reason} 일시정지했습니다. 잠시 뒤 [이어서 실행]을 눌러주세요.`);
+    broadcast();
+    return;
+  }
+
+  const wait = Math.max(60, Number(settings.run.rateLimitWaitSec) || 600) * 1000;
+  logger.warn(`${reason} ${Math.round(wait / 60000)}분 쉬었다가 알아서 다시 시작합니다.`);
+  state.waitUntil = Date.now() + wait;
+  broadcast();
+  const until = Date.now() + wait;
+  while (Date.now() < until && state.running && !state.paused) await sleep(1000);
+  state.waitUntil = null;
+  broadcast();
+}
+
 /** 글 하나가 저장됐을 때 그 주제를 데려온 주문의 몫으로 센다. */
 function countForRequest(job, field) {
   const request = job.requestId ? getRequest(job.requestId) : null;
@@ -311,11 +345,49 @@ function countForRequest(job, field) {
   return updateRequest(request.id, { [field]: (request[field] || 0) + 1 });
 }
 
+/**
+ * 대기열이 비었을 때 새 큰 주제를 골라 붙인다.
+ *
+ * "이어 붙이기" 가 켜져 있을 때만 불린다. 실패해도 예외를 밖으로 던지지 않는다.
+ * 여기서 멈춰 버리면 자는 동안 돌려놓은 의미가 없다.
+ *
+ * @returns {Promise<number>} 대기열에 붙은 주문 수
+ */
+async function appendBigTopics() {
+  const settings = getSettings();
+  state.discovering = true;
+  broadcast();
+  try {
+    const { topics } = await suggestBigTopics({ signal: state.abort?.signal });
+    let added = 0;
+    for (const item of topics) {
+      const request = addRequest({
+        bigTopic: item.bigTopic,
+        targetCount: settings.discover.targetCount,
+      });
+      updateRequest(request.id, { message: item.why || '자동으로 이어 붙인 주제입니다.' });
+      added += 1;
+    }
+    if (added) {
+      logger.info(
+        `대기열이 비어 새 큰 주제 ${added}건을 이어 붙였습니다. `
+        + `(각 ${settings.discover.targetCount}건 목표)`,
+      );
+    }
+    return added;
+  } finally {
+    state.discovering = false;
+    broadcast();
+  }
+}
+
 async function loop() {
   let processed = 0;
   let consecutiveFailures = 0;
   // 발굴을 나갔는데 한 건도 못 건진 횟수. 주문이 바뀌면 다시 0부터 센다.
   let emptyDiscoveries = 0;
+  // 새 큰 주제를 연달아 못 고른 횟수. 멈추지는 않고 쉬는 시간만 늘린다.
+  let autoMisses = 0;
 
   while (state.running) {
     if (state.paused) {
@@ -340,12 +412,51 @@ async function loop() {
       broadcast();
     }
 
+    const autoContinue = Boolean(getSettings().discover.autoContinue);
     const job = nextPending();
-    const step = planNextStep({ hasPending: Boolean(job), request });
+    const step = planNextStep({ hasPending: Boolean(job), request, autoContinue });
 
     if (step === 'stop-empty') {
       logger.info('대기 중인 주문과 주제가 모두 없습니다. 실행을 마칩니다.');
       break;
+    }
+
+    // 대기열이 비었다. 지금까지 쓴 결에 맞는 새 큰 주제를 골라 붙이고 계속 간다.
+    //
+    // **여기서는 멈추지 않는다.** 못 골랐으면 쉬었다 다시 해본다.
+    // 쉬는 시간은 실패할수록 늘려서, 무언가 크게 잘못됐을 때(로그인 풀림 등)
+    // 호출만 계속 태우지 않게 한다.
+    if (step === 'auto-topic') {
+      let added = 0;
+      try {
+        added = await appendBigTopics();
+      } catch (error) {
+        if (/중지했습니다/.test(error.message)) break;
+        if (error.rateLimited) {
+          await coolDown(`새 큰 주제를 고르는 중 사용량 한도에 걸렸습니다. ${error.message}`);
+          continue;
+        }
+        logger.error(`새 큰 주제를 고르지 못했습니다: ${shorten(error.message, 200)}`);
+      }
+
+      if (added) {
+        autoMisses = 0;
+        continue;
+      }
+
+      autoMisses += 1;
+      const base = Math.max(10, Number(getSettings().run.autoRetrySec) || 60);
+      const wait = Math.min(base * 2 ** (autoMisses - 1), 900) * 1000;   // 최대 15분
+      logger.warn(
+        `새 큰 주제를 못 골랐습니다 (${autoMisses}번째). `
+        + `${Math.round(wait / 1000)}초 뒤에 다시 해봅니다. 실행은 멈추지 않습니다.`,
+      );
+      state.waitUntil = Date.now() + wait;
+      broadcast();
+      const until = Date.now() + wait;
+      while (Date.now() < until && state.running && !state.paused) await sleep(500);
+      state.waitUntil = null;
+      continue;
     }
 
     // 목표를 채웠다. 넉넉히 받아 둔 주제가 남아 있으면 건너뜀으로 정리하고
@@ -390,9 +501,7 @@ async function loop() {
         added = await refillQueue(request);
       } catch (error) {
         if (error.rateLimited) {
-          state.paused = true;
-          logger.error(`주제를 찾는 중 사용량 한도에 걸려 일시정지했습니다. ${error.message}`);
-          broadcast();
+          await coolDown(`주제를 찾는 중 사용량 한도에 걸렸습니다. ${shorten(error.message, 120)}`);
           continue;
         }
         if (/중지했습니다/.test(error.message)) break;
@@ -434,12 +543,11 @@ async function loop() {
     } catch (error) {
       const message = error.message || String(error);
 
-      // 사용량 한도는 계속 돌려도 전부 실패한다. 멈추고 사람이 판단하게 둔다.
+      // 사용량 한도는 계속 돌려도 전부 실패한다. 주제는 대기로 되돌려 두고 쉰다.
+      // "이어 붙이기" 가 켜져 있으면 쉬었다 알아서 다시 잡고, 꺼져 있으면 일시정지한다.
       if (error.rateLimited) {
-        updateJob(job.id, { status: STATUS.PENDING, message: `사용량 한도로 대기: ${message}` });
-        state.paused = true;
-        logger.error(`사용량 한도에 걸려 일시정지했습니다. 잠시 뒤 [이어서 실행]을 눌러주세요. ${message}`);
-        broadcast();
+        updateJob(job.id, { status: STATUS.PENDING, message: `사용량 한도로 대기: ${shorten(message)}` });
+        await coolDown(`사용량 한도에 걸렸습니다. ${shorten(message, 120)}`);
         continue;
       }
 
@@ -500,7 +608,10 @@ async function loop() {
     const next = planNextStep({
       hasPending: Boolean(nextPending()),
       request: nextRequest(),
+      autoContinue: Boolean(getSettings().discover.autoContinue),
     });
+    // 'auto-topic' 은 위로 올려보낸다. 새 주제를 고르는 데만 몇 분이 걸려서
+    // 글 사이 대기까지 또 얹을 이유가 없다.
     if (next !== 'process' && next !== 'discover') continue;
 
     // 짧은 시간에 몰아서 올리면 호스팅의 요청 제한에 걸릴 수 있다. 사이를 띄운다.
@@ -534,7 +645,10 @@ export function start() {
   if (state.running) return { ok: false, message: '이미 실행 중입니다.' };
 
   // 주문도 없고 손으로 넣은 주제도 없으면 할 일이 없다.
-  if (!nextRequest() && !nextPending()) {
+  // 다만 "이어 붙이기" 가 켜져 있으면 대기열이 텅 비어 있어도 시작할 수 있다.
+  // 알아서 큰 주제를 골라 오기 때문이다.
+  const autoContinue = Boolean(getSettings().discover.autoContinue);
+  if (!autoContinue && !nextRequest() && !nextPending()) {
     return {
       ok: false,
       message: '2번 칸에 큰 주제를 넣고 [확인]을 누르거나, 직접 주제를 추가한 뒤에 실행해 주세요.',
@@ -556,11 +670,19 @@ export function start() {
   broadcast();
 
   const { remaining, open } = requestStats();
-  logger.info(
-    open
-      ? `실행 시작 - 주문 ${open}건, 앞으로 쓸 글 ${remaining}편 (대기 주제 ${stats().pending}건)`
-      : `실행 시작 - 대기 주제 ${stats().pending}건`,
-  );
+  if (open) {
+    logger.info(`실행 시작 - 주문 ${open}건, 앞으로 쓸 글 ${remaining}편 (대기 주제 ${stats().pending}건)`);
+  } else if (autoContinue) {
+    logger.info('실행 시작 - 대기열이 비어 있어 큰 주제를 알아서 골라 시작합니다.');
+  } else {
+    logger.info(`실행 시작 - 대기 주제 ${stats().pending}건`);
+  }
+  if (autoContinue) {
+    logger.info(
+      '이어 붙이기가 켜져 있습니다. 대기열이 비면 새 큰 주제를 골라 계속 씁니다. '
+      + '멈추려면 [중지]를 누르세요.',
+    );
+  }
   loop().catch((error) => {
     logger.error(`실행 루프 오류: ${error.message}`);
     state.running = false;

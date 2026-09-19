@@ -78,6 +78,30 @@ export function seenKeys() {
   return new Set(load().map((entry) => entry.key));
 }
 
+/**
+ * 지금까지 다룬 **큰 주제**들. 최근에 쓴 것부터.
+ *
+ * 대기열이 비었을 때 "이 블로그가 무슨 결이었는지" 를 AI에게 알려주는 데 쓴다.
+ * 주문 목록(requests.json)은 사람이 비울 수 있어서, 오래 남는 이쪽을 본다.
+ */
+export function usedBigTopics(limit = 40) {
+  const list = load();
+  const seen = new Set();
+  const out = [];
+  for (let i = list.length - 1; i >= 0 && out.length < limit; i -= 1) {
+    const big = list[i].bigTopic;
+    if (!big || seen.has(big)) continue;
+    seen.add(big);
+    out.push(big);
+  }
+  return out;
+}
+
+/** 최근에 쓴 글 제목 몇 개. 큰 주제만으로는 결이 잘 안 잡힐 때 같이 보여준다. */
+export function recentWritten(limit = 12) {
+  return load().slice(-limit).map((entry) => entry.topic).reverse();
+}
+
 export function historyStats(bigTopic) {
   const list = load();
   return {

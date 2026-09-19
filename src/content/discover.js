@@ -1,7 +1,9 @@
 import { runClaudeJson, WEB_TOOLS } from '../ai/claude.js';
 import { getSettings } from '../lib/settings.js';
 import { logger } from '../lib/events.js';
-import { recentTopics, seenKeys, topicKey } from '../lib/history.js';
+import {
+  recentTopics, seenKeys, topicKey, usedBigTopics, recentWritten,
+} from '../lib/history.js';
 import { isUsableUrl } from './research.js';
 
 /**
@@ -267,4 +269,144 @@ export async function discoverTopics(bigTopic, { want, exclude = [], signal } = 
     received: raw.length,
     dropped,
   };
+}
+
+/* ------------------------------------------------------------------ */
+/* 큰 주제 이어 붙이기                                                   */
+/* ------------------------------------------------------------------ */
+
+/**
+ * 대기열이 비었을 때 쓸 **새 큰 주제**를 고른다.
+ *
+ * 발굴(discoverTopics)이 "이 큰 주제로 무슨 글을 쓸까" 라면,
+ * 이쪽은 한 단계 위에서 "이제 무슨 큰 주제를 잡을까" 를 정한다.
+ *
+ * 지금까지 다룬 큰 주제와 **결이 이어지는** 것을 고르게 한다. 아무거나 고르면
+ * 블로그가 잡화점이 되고, 애드센스 심사에서 주제 일관성으로 불리해진다.
+ *
+ * 검색을 조금 쓴다. 소재가 실제로 나오는 분야인지 확인하지 않고 고르면
+ * 다음 단계(발굴)에서 "새 주제를 찾지 못했습니다" 로 헛도는 일이 생긴다.
+ */
+const SUGGEST_SYSTEM = [
+  '당신은 블로그의 방향을 잡는 편집장입니다.',
+  '지금까지 다룬 분야와 결이 이어지면서 소재가 꾸준히 나오는 새 분야를 고릅니다.',
+  'WebSearch 로 그 분야에 최근 소식이 실제로 있는지 확인합니다.',
+  '요청받은 JSON 형식만 정확히 출력합니다.',
+].join(' ');
+
+export function buildSuggestPrompt(settings, want) {
+  const used = usedBigTopics(40);
+  const written = recentWritten(10);
+  const { region, autoSearches } = settings.discover;
+  const year = new Date().getFullYear();
+
+  // 처음 돌리는 경우다. 결을 잡을 근거가 없으니 일반적인 정보성 분야에서 고른다.
+  const seed = used.length
+    ? [
+      '[지금까지 다룬 큰 주제]',
+      ...used.map((topic) => `- ${topic}`),
+      '',
+      ...(written.length
+        ? ['[최근에 쓴 글 제목]', ...written.map((topic) => `- ${topic}`), '']
+        : []),
+      '이 블로그와 **결이 이어지는** 새 큰 주제를 골라 주세요.',
+      '위 목록과 겹치면 안 됩니다. 같은 분야의 **다른 갈래**로 넓히세요.',
+    ].join('\n')
+    : [
+      '아직 쓴 글이 없습니다.',
+      `${region} 독자가 꾸준히 검색하는 **생활 정보 분야**에서 골라 주세요.`,
+      '제도, 지원금, 자격, 요금, 세금처럼 사람들이 직접 찾아보는 쪽이 좋습니다.',
+    ].join('\n');
+
+  return `오늘은 ${today()} 입니다.
+
+${seed}
+
+새 큰 주제 ${want}개를 골라 주세요. **글은 쓰지 마세요.**
+
+[큰 주제의 넓이]
+넓이가 제일 중요합니다. 잘못 잡으면 바로 소재가 떨어지거나 블로그 색이 흐려집니다.
+
+- 너무 넓음: "정부 지원금" — 소재는 많지만 성격이 제각각이라 색이 흐려집니다
+- **적당함: "청년 정부 지원금"** — 소재가 꾸준하고 방향이 한결같습니다
+- 너무 좁음: "${year}년 청년월세지원 소득 기준" — 두세 편 쓰면 더 쓸 것이 없습니다
+
+가운데 넓이로 잡으세요. 낱말 2~4개 정도입니다.
+
+[반드시 지킬 것]
+- WebSearch 를 ${autoSearches}회 이내로 써서 **그 분야에 최근 소식이 실제로 있는지** 확인하세요.
+  최근 소식이 없는 분야를 고르면 다음 단계에서 쓸 글을 못 찾습니다.
+- ${region} 독자 기준입니다.
+- 애드센스가 금지하는 분야(성인, 도박, 무기, 의료·금융 단정, 정치 진영 다툼)는 고르지 마세요.
+- 연예인 사생활이나 특정 개인 신상도 안 됩니다.
+- 큰 주제에 낚시성 표현("충격", "이것만 알면")을 넣지 마세요.
+
+[출력] JSON 객체 하나만. 설명도 코드 펜스도 붙이지 마세요.
+
+{
+  "topics": [
+    {"bigTopic":"청년 주거 지원","why":"이번 달에도 새 공고가 이어져 소재가 꾸준합니다","link":"기존 청년 지원금과 같은 독자층입니다"}
+  ]
+}`;
+}
+
+/** 큰 주제로 쓸 만한 문자열인지. 너무 길거나 문장이면 버린다. */
+function normalizeBigTopic(raw) {
+  const topic = text(raw?.bigTopic ?? raw?.topic, 40)
+    .replace(/^["'\s-]+|["'\s]+$/g, '')
+    .replace(/\s+/g, ' ');
+  if (!topic || topic.length < 2) return null;
+  if (CLICKBAIT.test(topic)) return null;
+  // 큰 주제는 분야 이름이다. 문장으로 오면 발굴 프롬프트가 이상해진다.
+  if (/[.?!]$/.test(topic) || topic.length > 30) return null;
+  return {
+    bigTopic: topic,
+    why: text(raw?.why, 200),
+    link: text(raw?.link, 200),
+  };
+}
+
+/**
+ * 새 큰 주제를 골라 온다.
+ *
+ * @returns {Promise<{topics: object[], searches: number}>}
+ */
+export async function suggestBigTopics({ want, exclude = [], signal } = {}) {
+  const settings = getSettings();
+  const target = Math.max(1, want || settings.discover.autoBatch);
+
+  logger.step(`대기열이 비어 새 큰 주제를 고르는 중... (${target}개)`);
+
+  const reply = await runClaudeJson(
+    buildSuggestPrompt(settings, target + 2),
+    {
+      systemPrompt: SUGGEST_SYSTEM,
+      tools: WEB_TOOLS,
+      timeoutMs: settings.discover.timeoutMs,
+      signal,
+    },
+  );
+
+  // 이미 다룬 큰 주제는 버린다. 같은 것을 다시 골라 오면 발굴에서 전부 중복으로 걸린다.
+  const seen = new Set([...usedBigTopics(60), ...exclude].map(topicKey));
+  const topics = [];
+  for (const raw of Array.isArray(reply.data?.topics) ? reply.data.topics : []) {
+    const item = normalizeBigTopic(raw);
+    if (!item) continue;
+    const key = topicKey(item.bigTopic);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    topics.push(item);
+    if (topics.length >= target) break;
+  }
+
+  logger.info(
+    `새 큰 주제 ${topics.length}개를 골랐습니다. (검색 ${reply.searches || 0}회)`
+    + `${topics.length ? ` — ${topics.map((t) => t.bigTopic).join(', ')}` : ''}`,
+  );
+  for (const item of topics) {
+    logger.info(`  "${item.bigTopic}" — ${item.why}${item.link ? ` (${item.link})` : ''}`);
+  }
+
+  return { topics, searches: reply.searches || 0 };
 }

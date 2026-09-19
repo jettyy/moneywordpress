@@ -283,14 +283,19 @@ function renderRunner() {
     : (total ? Math.round((finished / total) * 100) : 0);
   $('progress-bar').style.width = `${Math.min(100, percent)}%`;
 
-  // 돌고 있으면 지금 주문을, 아니면 대기열 전체를 보여준다.
-  const open = runner.requests?.open || 0;
+  // 대기열 숫자는 주문 목록에서 바로 센다. runner 쪽 값은 실행기가 한 번 더
+  // 알려줄 때까지 옛날 값이라, 주문을 지우고 나면 잠깐 안 맞는다.
+  const orders = (state.requests || []).filter((o) => o.status === 'waiting' || o.status === 'running');
+  const open = orders.length;
+  const remaining = orders.reduce((sum, o) => sum + Math.max(0, o.targetCount - o.saved), 0);
   let text;
   if (runner.bigTopic) {
     text = `"${runner.bigTopic}" ${runner.requestSaved}/${runner.goal}건`;
     if (open > 1) text += ` · 대기열 ${open - 1}건 더`;
   } else if (open) {
-    text = `대기열 ${open}건 · 앞으로 쓸 글 ${runner.requests.remaining}편`;
+    text = `대기열 ${open}건 · 앞으로 쓸 글 ${remaining}편`;
+  } else if (state.settings?.discover?.autoContinue) {
+    text = '대기열 비어 있음 (주제를 알아서 이어 붙입니다)';
   } else {
     text = `전체 ${total}`;
   }
@@ -305,8 +310,9 @@ function renderRunner() {
   $('run-stats').textContent = text;
 
   // 대기열에 주문이 있으면 대기 주제가 0건이어도 시작할 수 있다. 알아서 찾아오기 때문이다.
-  const hasOrder = (runner.requests?.open || 0) > 0;
-  $('btn-start').disabled = runner.running || (pending === 0 && !hasOrder);
+  // 이어 붙이기가 켜져 있으면 대기열까지 텅 비어 있어도 시작할 수 있다.
+  const auto = Boolean(state.settings?.discover?.autoContinue);
+  $('btn-start').disabled = runner.running || (pending === 0 && !open && !auto);
   $('btn-pause').disabled = !runner.running;
   $('btn-pause').textContent = runner.paused ? '이어서 실행' : '일시정지';
   $('btn-stop').disabled = !runner.running;
@@ -326,6 +332,8 @@ function renderSettings() {
   $('s-recency').value = s.discover.recencyDays;
   $('s-min-score').value = s.discover.minScore;
   $('s-discover-searches').value = s.discover.maxSearches;
+  $('s-auto-continue').checked = Boolean(s.discover.autoContinue);
+  $('s-auto-batch').value = s.discover.autoBatch;
   renderOrders();
   renderDiscoverState();
 
@@ -586,9 +594,10 @@ function renderDiscoverState() {
   const open = (state.requests || []).filter((r) => r.status === 'waiting' || r.status === 'running');
   const remaining = open.reduce((sum, r) => sum + Math.max(0, r.targetCount - r.saved), 0);
   const written = state.history?.total || 0;
+  const auto = state.settings?.discover?.autoContinue ? ' · 이어 붙이기 켜짐' : '';
   $('discover-state').textContent = open.length
-    ? `대기열 ${open.length}건 · 앞으로 쓸 글 ${remaining}편`
-    : `큰 주제를 넣고 [확인]을 누르세요${written ? ` · 지금까지 ${written}건 발굴함` : ''}`;
+    ? `대기열 ${open.length}건 · 앞으로 쓸 글 ${remaining}편${auto}`
+    : `큰 주제를 넣고 [확인]을 누르세요${written ? ` · 지금까지 ${written}건 발굴함` : ''}${auto}`;
 }
 
 /** 대기열. 넣은 순서대로 처리되고, 아직 시작 안 한 것은 취소할 수 있다. */
@@ -638,12 +647,25 @@ async function saveDiscoverSettings() {
       recencyDays: Number($('s-recency').value) || 30,
       minScore: Number($('s-min-score').value) || 0,
       maxSearches: Number($('s-discover-searches').value) || 6,
+      autoContinue: $('s-auto-continue').checked,
+      autoBatch: Number($('s-auto-batch').value) || 2,
     },
   });
+  // 이어 붙이기를 켜면 대기열이 비어 있어도 [실행]이 눌린다. 버튼 상태를 바로 고친다.
+  renderRunner();
 }
-for (const id of ['s-target-count', 's-batch-size', 's-recency', 's-min-score', 's-discover-searches']) {
+for (const id of [
+  's-target-count', 's-batch-size', 's-recency', 's-min-score', 's-discover-searches',
+  's-auto-continue', 's-auto-batch',
+]) {
   $(id).addEventListener('change', () => saveDiscoverSettings().catch((e) => toast(e.message)));
 }
+
+$('s-auto-continue').addEventListener('change', () => {
+  toast($('s-auto-continue').checked
+    ? '대기열이 비면 큰 주제를 알아서 이어 붙입니다. [중지]를 누를 때까지 멈추지 않습니다.'
+    : '이어 붙이기를 껐습니다. 대기열을 다 쓰면 실행이 끝납니다.');
+});
 
 /**
  * [확인] — 대기열에 넣고 바로 입력칸을 비운다.

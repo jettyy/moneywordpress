@@ -23,8 +23,12 @@ import {
 } from '../src/content/imagegen.js';
 import { renderTemplate } from '../src/content/templates/index.js';
 import { buildResearchBlock, isUsableUrl } from '../src/content/research.js';
-import { buildDiscoverPrompt, normalizePick, screenPicks } from '../src/content/discover.js';
-import { topicKey } from '../src/lib/history.js';
+import {
+  buildDiscoverPrompt, buildSuggestPrompt, normalizePick, screenPicks,
+} from '../src/content/discover.js';
+import {
+  topicKey, recordTopics, clearHistory, usedBigTopics, recentWritten,
+} from '../src/lib/history.js';
 import { planNextStep, discoverCapFor } from '../src/queue/runner.js';
 import {
   REQUEST_STATUS, addRequest, nextRequest, finishRequest, updateRequest,
@@ -710,6 +714,52 @@ test('대기가 떨어지면 그 주문의 큰 주제로 새로 찾아온다', (
 test('주문이 없으면 손으로 넣은 주제만 쓰고 끝낸다', () => {
   assert.equal(plan(true, null), 'process');
   assert.equal(plan(false, null), 'stop-empty');
+});
+
+test('이어 붙이기를 켜면 대기열이 비어도 끝내지 않는다', () => {
+  // 이게 없으면 자는 동안 대기열을 다 쓰고 아침까지 놀고 있다.
+  const auto = (hasPending, request) => planNextStep({ hasPending, request, autoContinue: true });
+  assert.equal(auto(false, null), 'auto-topic', '새 큰 주제를 골라 와야 합니다');
+  // 쓸 게 남아 있으면 그것부터. 멀쩡한 대기 주제를 두고 새 주제를 고르면 안 된다.
+  assert.equal(auto(true, null), 'process');
+  assert.equal(auto(true, order()), 'process');
+  // 주문이 살아 있는 동안에는 평소와 똑같이 돈다.
+  assert.equal(auto(false, order({ saved: 2 })), 'discover');
+  assert.equal(auto(false, order({ saved: 5 })), 'finish-request');
+  assert.equal(auto(false, order({ discovered: 99 })), 'give-up-request');
+});
+
+test('이어 붙이기 프롬프트에 지금까지 쓴 결과 넓이 기준이 들어간다', () => {
+  clearHistory();
+  recordTopics('전기차', ['2026년 전기차 보조금 지역별 정리']);
+  recordTopics('청년 지원금', ['청년월세 특별지원 신청 방법']);
+
+  const prompt = buildSuggestPrompt(settings, 2);
+  assert.match(prompt, /전기차/, '지금까지 쓴 큰 주제가 빠졌습니다');
+  assert.match(prompt, /청년 지원금/);
+  assert.match(prompt, /결이 이어지는/, '결을 이으라는 지시가 빠졌습니다');
+  assert.match(prompt, /겹치면 안 됩니다/, '중복 금지 지시가 빠졌습니다');
+  assert.match(prompt, /너무 넓음|적당함|너무 좁음/, '넓이 기준이 빠졌습니다');
+  assert.match(prompt, /WebSearch/, '소재가 실제로 있는지 확인하라는 지시가 빠졌습니다');
+  assert.match(prompt, /애드센스가 금지하는 분야/);
+  clearHistory();
+});
+
+test('쓴 글이 없으면 결 대신 일반 정보 분야에서 고르게 한다', () => {
+  clearHistory();
+  const prompt = buildSuggestPrompt(settings, 2);
+  assert.match(prompt, /아직 쓴 글이 없습니다/);
+  assert.match(prompt, /생활 정보 분야/);
+});
+
+test('지금까지 다룬 큰 주제를 최근 것부터 모은다', () => {
+  clearHistory();
+  recordTopics('전기차', ['주제 하나']);
+  recordTopics('부동산', ['주제 둘']);
+  recordTopics('전기차', ['주제 셋']);        // 같은 큰 주제는 한 번만
+  assert.deepEqual(usedBigTopics(), ['전기차', '부동산']);
+  assert.deepEqual(recentWritten(2), ['주제 셋', '주제 둘']);
+  clearHistory();
 });
 
 test('계속 찾아오는데 저장이 안 되면 그 주문을 포기한다', () => {
