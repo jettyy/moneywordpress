@@ -13,10 +13,11 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { checkCompliance, countChars, buildRuleBlock } from '../src/content/adsense.js';
+import { buildMainPrompt } from '../src/content/generator.js';
 import { buildPostContent, buildPreviewHtml } from '../src/content/gutenberg.js';
 import { buildMarkdown } from '../src/content/markdown.js';
 import { DEFAULT_SETTINGS, saveSettings, getSettings, publicSettings } from '../src/lib/settings.js';
-import { detectShape } from '../src/content/ranking.js';
+import { detectShape, buildChunkPrompt } from '../src/content/ranking.js';
 import {
   buildImagePrompt, buildPosterPrompt, pickAspectRatio,
   looksLikeImageModel, rankImageModels, pickVisionModel, priceOf,
@@ -616,6 +617,73 @@ test('슬러그를 주소에 쓸 수 있는 형태로 다듬는다', () => {
 test('엑셀에서 붙여넣은 주제를 줄 단위로 읽는다', () => {
   const topics = parseTopics('주제\n자격증 TOP 5\t비고\n자격증 TOP 5\n\n전세 계약 서류');
   assert.deepEqual(topics, ['자격증 TOP 5', '전세 계약 서류']);
+});
+
+/* ---------- 거절 금지 ---------- */
+
+test('집필 프롬프트가 거절을 정면으로 막는다', () => {
+  // 예전에는 근거가 부족하면 모델이 글쓰기를 통째로 거절했다.
+  // 자는 동안 100건을 돌리는 도구에서 열 건 중 서너 건이 빈손으로 끝났다.
+  const prompt = buildMainPrompt('수도권 대학 순위 TOP 50', settings, {
+    guidelineBlock: '', exampleBlock: '', researchBlock: '', shape: 'table', count: 50,
+  });
+  assert.match(prompt, /거절하지 마세요/, '거절 금지 지시가 없습니다');
+  assert.match(prompt, /과거 자료|통념|추정/, '무엇으로 쓰라는 안내가 없습니다');
+  // 앞뒤 두 군데에 넣는다. 긴 프롬프트는 가운데가 묻힌다.
+  assert.ok(
+    prompt.split('거절하').length - 1 >= 2,
+    '거절 금지를 프롬프트 앞뒤로 못박지 않았습니다',
+  );
+});
+
+test('근거 수준을 밝히라는 요구는 그대로 남아 있다', () => {
+  // "거절하지 마라" 와 "아무거나 지어내라" 는 다른 말이다. 뒤는 허용하면 안 된다.
+  const prompt = buildMainPrompt('수도권 대학 순위 TOP 50', settings, {
+    guidelineBlock: '', exampleBlock: '', researchBlock: '', shape: 'table', count: 50,
+  });
+  assert.match(prompt, /일반적으로 거론되는/, '통념임을 밝히라는 표현 안내가 없습니다');
+  assert.match(prompt, /확인된 사실처럼 단정/, '단정 금지가 빠졌습니다');
+  assert.match(prompt, /기관명|보도자료/, '가짜 출처 금지가 빠졌습니다');
+  assert.match(prompt, /공식 순위가 아니라/, '표 안내 문구 요구가 빠졌습니다');
+});
+
+test('개수를 못 채워도 채운 만큼 순위를 매기게 한다', () => {
+  const table = buildMainPrompt('수도권 대학 순위 TOP 50', settings, {
+    guidelineBlock: '', exampleBlock: '', researchBlock: '', shape: 'table', count: 50,
+  });
+  assert.match(table, /50개를 못 채워도 글은 씁니다/);
+  assert.match(table, /31개에 대해 1위부터 31위까지/, '부분 순위 예시가 빠졌습니다');
+  assert.match(table, /지어낸 이름으로 채우지 마세요/, '가짜 항목으로 채우는 것을 막지 않았습니다');
+  assert.match(table, /실제 개수를 밝히세요/);
+
+  // 항목별 상세형(TOP 5 같은 것)도 같은 규칙을 받는다.
+  const items = buildMainPrompt('국가기술자격증 TOP 5', settings, {
+    guidelineBlock: '', exampleBlock: '', researchBlock: '', shape: 'items', count: 5,
+  });
+  assert.match(items, /5개를 못 채워도 글은 씁니다/);
+});
+
+test('조사 자료가 있어도 빈 곳은 통념으로 채우게 한다', () => {
+  // 조사 자료가 붙으면 예전에는 "자료에 있는 것만" 이라 나머지를 비워 뒀다.
+  const prompt = buildMainPrompt('전기차 보조금', settings, {
+    guidelineBlock: '',
+    exampleBlock: '',
+    researchBlock: '[조사 자료 — 웹 검색으로 확인한 내용입니다]\n확인된 사실: ...',
+    shape: 'general',
+    count: 0,
+  });
+  assert.match(prompt, /비워 두지 말고/, '자료에 없는 부분을 채우라는 안내가 없습니다');
+  assert.match(prompt, /근거 수준을 밝혀서/);
+});
+
+test('큰 표 구간 프롬프트도 거절을 막되 지어내기는 막는다', () => {
+  const prompt = buildChunkPrompt({
+    topic: '수도권 대학 순위', headers: ['순위', '대학', '특징'],
+    start: 26, end: 50, existingNames: [], count: 50,
+  });
+  assert.match(prompt, /거절하지 마세요/);
+  assert.match(prompt, /있는 만큼만 채우고 거기서 멈추세요/, '짧은 표를 허용하지 않았습니다');
+  assert.match(prompt, /지어내/, '가짜 이름 금지가 빠졌습니다');
 });
 
 /* ---------- 주제 발굴 ---------- */

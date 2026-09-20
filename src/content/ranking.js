@@ -140,7 +140,7 @@ function broadenHint(start, count) {
     + '"더 이상 없습니다" 라고 답하지 말고, 범위를 넓혀 끝까지 채우세요.';
 }
 
-function buildChunkPrompt({ topic, headers, start, end, existingNames, count }) {
+export function buildChunkPrompt({ topic, headers, start, end, existingNames, count }) {
   const expected = end - start + 1;
   // 예시 행은 반드시 실제 열 개수와 같아야 한다.
   // 3칸짜리 예시를 고정으로 보여주면 열이 4개여도 3칸만 채워서 돌려준다.
@@ -162,6 +162,10 @@ function buildChunkPrompt({ topic, headers, start, end, existingNames, count }) 
 - 각 칸 24자 이내. 특수문자와 이모지는 쓰지 마세요.
 - 앞에 나온 항목을 다시 쓰지 마세요. 전부 새로운 항목이어야 합니다.
 - 공식 조사 결과가 아니라 널리 알려진 정보를 모은 참고용 표입니다. 실제 조사 수치는 지어내지 말고 일반적인 특징으로 채우세요.
+- **자료가 없다는 이유로 거절하지 마세요.** 과거 자료와 일반적으로 알려진 내용으로 채우면 됩니다.
+  순위가 확실하지 않아도 일반적으로 거론되는 순서로 번호를 매기세요.
+- 정말로 실재하는 항목이 이 구간만큼 없으면 **있는 만큼만 채우고 거기서 멈추세요.**
+  없는 이름을 지어내 칸을 채우는 것보다 짧은 표가 낫습니다.
 ${broaden ? `${broaden}\n` : ''}${existingNames.length ? `- 이미 나온 항목 ${existingNames.length}개 (전부 제외): ${existingNames.slice(-90).join(', ')}` : ''}
 
 JSON 만 출력:
@@ -257,7 +261,17 @@ export async function generateTableRows({
         const { added } = await fetchRange(start, end);
         gained += added;
       } catch (error) {
-        logger.warn(`${start}~${end}번 재생성 실패: ${error.message}`);
+        // 거절은 대개 "이 주제에 실재하는 항목이 여기까지뿐" 이라는 뜻이다.
+        // 없는 이름을 지어내는 것보다 짧은 표가 낫다. 글은 채운 만큼으로 계속 간다.
+        if (error.refusal) {
+          logger.info(
+            `${start}~${end}번은 더 채우지 않습니다. `
+            + '이 주제에 실재하는 항목이 여기까지인 것으로 보입니다. '
+            + `지금까지 모은 ${byRank.size}개로 순위를 매깁니다.`,
+          );
+        } else {
+          logger.warn(`${start}~${end}번 재생성 실패: ${error.message}`);
+        }
       }
     }
     onProgress?.({ filled: byRank.size, total: count });
