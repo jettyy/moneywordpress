@@ -372,6 +372,11 @@ function renderSettings() {
   $('s-thumb-featured').checked = Boolean(s.thumbnail.featured);
   $('s-thumb-emoji').checked = Boolean(s.thumbnail.emoji);
 
+  $('s-chatgpt').checked = Boolean(s.chatgpt.enabled);
+  if (document.activeElement !== $('s-chatgpt-suffix')) {
+    $('s-chatgpt-suffix').value = s.chatgpt.promptSuffix || '';
+  }
+
   $('s-image').checked = Boolean(s.image.enabled);
   $('s-image-mode').value = s.image.mode || 'full';
   $('s-image-poster').value = s.image.poster || 'bold';
@@ -471,6 +476,7 @@ async function boot() {
   (data.logs || []).forEach(appendLog);
   connectStream();
   api('/api/health').then(renderPills).catch(() => {});
+  refreshChatGptState().catch(() => {});
   if (data.site?.connected) loadCategories();
   setInterval(renderRunner, 1000);
 }
@@ -1182,6 +1188,87 @@ $('btn-test-ai').onclick = async () => {
       box.textContent =
         `성공 — 모델 ${shortModel(data.model)} (${data.model})\n` +
         `응답: ${data.answer} · ${Math.round((data.durationMs || 0) / 100) / 10}초`;
+    }
+  } catch (error) {
+    box.classList.add('bad');
+    box.textContent = `실패: ${error.message}`;
+  } finally {
+    button.disabled = false;
+  }
+};
+
+/* ---------- ChatGPT 썸네일 ---------- */
+
+async function refreshChatGptState() {
+  try {
+    const data = await api('/api/chatgpt/status');
+    $('chatgpt-state').textContent = data.hasProfile
+      ? '로그인 세션이 있습니다'
+      : '로그인한 적이 없습니다';
+  } catch {
+    $('chatgpt-state').textContent = '';
+  }
+}
+
+for (const id of ['s-chatgpt', 's-chatgpt-suffix']) {
+  $(id).addEventListener('change', async () => {
+    await patchSettings({
+      chatgpt: {
+        enabled: $('s-chatgpt').checked,
+        promptSuffix: $('s-chatgpt-suffix').value.trim(),
+      },
+    });
+    toast($('s-chatgpt').checked
+      ? 'ChatGPT로 썸네일을 만듭니다. 실패하면 이미지 API나 HTML 썸네일로 내려갑니다.'
+      : 'ChatGPT 썸네일을 껐습니다.');
+  });
+}
+
+$('btn-chatgpt-login').onclick = async () => {
+  const button = $('btn-chatgpt-login');
+  const box = $('chatgpt-test-result');
+  button.disabled = true;
+  box.classList.remove('hidden', 'bad', 'good');
+  box.textContent = '브라우저 창을 띄웠습니다. 그 창에서 ChatGPT에 로그인해 주세요.\n'
+    + '로그인이 끝나면 자동으로 확인합니다. (최대 5분 기다립니다)';
+  try {
+    const data = await api('/api/chatgpt/login', { method: 'POST' });
+    box.classList.add(data.ok && !data.failed ? 'good' : 'bad');
+    box.textContent = data.message || '';
+    await refreshChatGptState();
+  } catch (error) {
+    box.classList.add('bad');
+    box.textContent = `실패: ${error.message}`;
+  } finally {
+    button.disabled = false;
+  }
+};
+
+$('btn-chatgpt-test').onclick = async () => {
+  const button = $('btn-chatgpt-test');
+  const box = $('chatgpt-test-result');
+  const preview = $('chatgpt-test-preview');
+  button.disabled = true;
+  preview.classList.add('hidden');
+  box.classList.remove('hidden', 'bad', 'good');
+  box.textContent = 'ChatGPT에 썸네일을 요청하는 중... (최대 5분)\n'
+    + '브라우저 창에서 진행 상황을 볼 수 있습니다.';
+  try {
+    const data = await api('/api/chatgpt/test', {
+      method: 'POST',
+      body: { promptSuffix: $('s-chatgpt-suffix').value.trim() },
+    });
+    state.settings = data.settings || state.settings;
+    if (data.failed) {
+      box.classList.add('bad');
+      box.textContent = `실패: ${data.message}\n`
+        + '(실제 실행에서는 여기서 멈추지 않고 이미지 API나 HTML 썸네일로 넘어갑니다)';
+    } else {
+      box.classList.add('good');
+      box.textContent = `성공 — ${data.kb}KB\n`
+        + '아래 그림에 한글이 제대로 박혔는지 직접 확인해 주세요.';
+      preview.src = data.dataUri;
+      preview.classList.remove('hidden');
     }
   } catch (error) {
     box.classList.add('bad');

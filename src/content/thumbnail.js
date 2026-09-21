@@ -7,6 +7,7 @@ import { THUMB_DIR, ensureDirs } from '../lib/paths.js';
 import { slugify } from '../lib/util.js';
 import { logger } from '../lib/events.js';
 import { maybeGenerateImage } from './imagegen.js';
+import { generateThumbnail as generateWithChatGpt } from './chatgpt.js';
 
 /**
  * AI 가 설계한 문구/색상을 HTML 템플릿에 얹고 스크린샷으로 PNG를 만든다.
@@ -28,7 +29,30 @@ export async function renderThumbnail(post, { jobId = '', signal } = {}) {
   const settings = getSettings();
   const { width, height } = settings.thumbnail;
 
-  // 이미지 API 에 맡기는 부분.
+  // 1순위 — 구독 중인 ChatGPT.
+  //
+  // 켜 두면 여기부터 시도한다. 이미 내고 있는 구독료 안에서 해결되기 때문이다.
+  // 브라우저를 조작하는 방식이라 실패할 여지가 많은데, 실패해도 글을 버리지
+  // 않고 아래의 이미지 API → HTML 썸네일 순으로 그냥 내려간다.
+  if (settings.chatgpt.enabled) {
+    try {
+      const image = await generateWithChatGpt(post.thumbnail, { width, height, signal });
+      const { filePath, fileName } = saveDataUri(image.dataUri, jobId, post.title);
+      logger.info(
+        `썸네일 저장 완료 (ChatGPT, ${Math.round(fs.statSync(filePath).size / 1024)}KB)`,
+        { jobId },
+      );
+      return { filePath, fileName, style: 'chatgpt', generated: true, mode: 'full' };
+    } catch (error) {
+      if (/중지했습니다/.test(error.message)) throw error;
+      logger.warn(
+        `ChatGPT 썸네일에 실패해 다음 방법으로 넘어갑니다: ${error.message}`,
+        { jobId },
+      );
+    }
+  }
+
+  // 2순위 — 이미지 생성 API.
   //   full    — 글자까지 그린 완성 썸네일이 온다. 그대로 쓴다.
   //   overlay — 글자 없는 배경만 온다. 아래에서 브라우저가 한글을 얹는다.
   // 꺼져 있거나 실패하면 null 이 오고, HTML 썸네일로 그대로 진행한다.

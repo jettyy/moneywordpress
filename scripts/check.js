@@ -28,6 +28,9 @@ import {
   buildDiscoverPrompt, buildSuggestPrompt, normalizePick, screenPicks,
 } from '../src/content/discover.js';
 import {
+  buildChatGptPrompt, profileDir as chatGptProfileDir,
+} from '../src/content/chatgpt.js';
+import {
   topicKey, recordTopics, clearHistory, usedBigTopics, recentWritten,
 } from '../src/lib/history.js';
 import { planNextStep, discoverCapFor } from '../src/queue/runner.js';
@@ -686,6 +689,55 @@ test('큰 표 구간 프롬프트도 거절을 막되 지어내기는 막는다'
   assert.match(prompt, /거절하지 마세요/);
   assert.match(prompt, /있는 만큼만 채우고 거기서 멈추세요/, '짧은 표를 허용하지 않았습니다');
   assert.match(prompt, /지어내/, '가짜 이름 금지가 빠졌습니다');
+});
+
+/* ---------- ChatGPT 썸네일 ---------- */
+
+test('ChatGPT 프롬프트에 썸네일 문구가 한 글자씩 들어간다', () => {
+  const spec = {
+    posterLines: ['4년제만 답이 아니다', '취업 최강 전문대'],
+    ribbon: 'TOP 50 대공개 (2026 최신)',
+    subline: '실무, 자격증, 현장 경험으로 골랐습니다',
+    badge: '전문대',
+    keywords: ['간호보건', '반도체'],
+    scene: 'students in a bright technical college workshop',
+  };
+  const prompt = buildChatGptPrompt(spec, { poster: 'bold', width: 1200, height: 630 });
+
+  assert.match(prompt, /이미지를 1장 만들어 주세요/, '그림을 만들라는 말이 없습니다');
+  assert.match(prompt, /1200x630/, '비율 안내가 빠졌습니다');
+  // 문구는 이미지 API 와 같은 방식으로 한 줄씩 못박는다.
+  for (const text of ['4년제만 답이 아니다', '취업 최강 전문대', 'TOP 50 대공개 (2026 최신)', '전문대']) {
+    assert.ok(prompt.includes(text), `"${text}" 가 프롬프트에 없습니다`);
+  }
+  assert.match(prompt, /every Korean character must be rendered perfectly/, '한글 보존 지시가 빠졌습니다');
+});
+
+test('ChatGPT 에 덧붙일 요청이 프롬프트 끝에 붙는다', () => {
+  const prompt = buildChatGptPrompt(
+    { posterLines: ['제목'], scene: 'a desk' },
+    { poster: 'clean', width: 1200, height: 630, extra: '파스텔 톤으로 그려 주세요' },
+  );
+  assert.ok(prompt.trim().endsWith('파스텔 톤으로 그려 주세요'), '덧붙일 요청이 끝에 없습니다');
+});
+
+test('ChatGPT 프로필 경로는 설정으로 바꿀 수 있다', () => {
+  assert.match(chatGptProfileDir(), /chatgpt-profile$/);
+  saveSettings({ chatgpt: { profileDir: '/tmp/내-프로필' } });
+  assert.equal(chatGptProfileDir(), '/tmp/내-프로필');
+  saveSettings({ chatgpt: { profileDir: '' } });
+});
+
+test('ChatGPT 설정은 기본으로 꺼져 있고 대시보드로 내려간다', () => {
+  // 브라우저를 띄우는 기능이라 모르고 켜져 있으면 곤란하다.
+  assert.equal(DEFAULT_SETTINGS.chatgpt.enabled, false);
+  assert.equal(typeof publicSettings().chatgpt.enabled, 'boolean', '설정이 화면으로 안 내려갑니다');
+  // 비밀번호를 받는 칸이 아예 없어야 한다. 로그인은 사람이 창에서 직접 한다.
+  assert.deepEqual(
+    Object.keys(DEFAULT_SETTINGS.chatgpt).filter((key) => /pass|token|key|secret/i.test(key)),
+    [],
+    'ChatGPT 설정에 비밀번호성 항목이 들어갔습니다',
+  );
 });
 
 /* ---------- 제목 직접 정하기 ---------- */

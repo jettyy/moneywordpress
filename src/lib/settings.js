@@ -98,6 +98,22 @@ export const DEFAULT_SETTINGS = {
     timeoutMs: 180000,
   },
 
+  // 구독 중인 ChatGPT 로 썸네일 만들기
+  //
+  // 이미지 생성 API 는 장당 돈이 든다. ChatGPT 를 이미 구독하고 있다면
+  // 브라우저로 그쪽에서 뽑아 오면 추가 비용이 없다. 대신 API 가 아니라
+  // 화면을 조작하는 방식이라 느리고, ChatGPT 화면이 바뀌면 깨진다.
+  // 실패하면 이미지 API → HTML 썸네일 순으로 알아서 물러선다.
+  chatgpt: {
+    enabled: false,
+    profileDir: '',              // 비우면 data/chatgpt-profile. 로그인 세션이 남는 곳
+    // 로그인 세션을 유지하려면 실제 브라우저 창이 필요하다. 창은 한 번만 뜨고
+    // 계속 재사용하므로, 글을 여러 편 써도 창이 매번 뜨지는 않는다.
+    headless: false,
+    timeoutMs: 300000,           // 그림이 나올 때까지 기다리는 시간
+    promptSuffix: '',            // 매번 덧붙일 내 취향 (예: "파스텔 톤으로")
+  },
+
   // 썸네일
   thumbnail: {
     width: 1200,

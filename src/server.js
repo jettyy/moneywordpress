@@ -22,6 +22,11 @@ import { MODELS } from './ai/models.js';
 import { RULES } from './content/adsense.js';
 import { runResearch, isUsableUrl } from './content/research.js';
 import { discoverTopics } from './content/discover.js';
+import {
+  openLoginWindow, checkLogin as checkChatGptLogin, hasProfile,
+  profileDir as chatGptProfileDir, generateThumbnail as generateChatGptThumbnail,
+  closeChatGpt,
+} from './content/chatgpt.js';
 import { recordTopics, historyStats, clearHistory, topicKey } from './lib/history.js';
 import {
   generateBackground, pickAspectRatio, getImageModels, verifyKoreanText,
@@ -560,6 +565,63 @@ app.post('/api/image/test', wrap(async (req, res) => {
   }
 }));
 
+/* ---------- ChatGPT 썸네일 ---------- */
+
+/**
+ * 로그인 창을 띄운다. 비밀번호는 이 프로그램이 받지 않는다.
+ * 창을 열어 줄 뿐이고, 사람이 직접 로그인하면 프로필 폴더에 세션이 남는다.
+ */
+app.post('/api/chatgpt/login', wrap(async (req, res) => {
+  try {
+    const result = await openLoginWindow({ waitMs: Number(req.body?.waitMs) || 300000 });
+    res.json({ ok: true, ...result, hasProfile: hasProfile() });
+  } catch (error) {
+    logger.error(`ChatGPT 로그인 창을 열지 못했습니다: ${error.message}`);
+    res.json({ ok: true, failed: true, message: error.message });
+  }
+}));
+
+app.get('/api/chatgpt/status', wrap(async (req, res) => {
+  const base = { ok: true, hasProfile: hasProfile(), profileDir: chatGptProfileDir() };
+  // ?check=1 이면 실제로 창을 띄워 로그인이 살아 있는지 본다. (몇 초 걸린다)
+  if (req.query.check) Object.assign(base, { login: await checkChatGptLogin() });
+  res.json(base);
+}));
+
+/** 실제로 한 장 뽑아 본다. 100편을 돌리기 전에 눈으로 확인하는 용도다. */
+app.post('/api/chatgpt/test', wrap(async (req, res) => {
+  const patch = { chatgpt: {} };
+  if (req.body?.enabled !== undefined) patch.chatgpt.enabled = Boolean(req.body.enabled);
+  if (req.body?.promptSuffix !== undefined) patch.chatgpt.promptSuffix = String(req.body.promptSuffix);
+  if (req.body?.headless !== undefined) patch.chatgpt.headless = Boolean(req.body.headless);
+  if (Object.keys(patch.chatgpt).length) saveSettings(patch);
+
+  const { width, height } = getSettings().thumbnail;
+  const sample = {
+    posterLines: ['4년제만 답이 아니다', '취업 최강 전문대'],
+    ribbon: 'TOP 50 대공개 (2026 최신)',
+    subline: '실무, 자격증, 현장 경험으로 골랐습니다',
+    badge: '전문대',
+    keywords: ['간호보건', '반도체', '자동차', '항공', 'IT'],
+    headline: '취업 최강 전문대',
+    scene: 'students in a bright technical college workshop with machines, computers and lab benches',
+  };
+
+  logger.step('ChatGPT 썸네일 테스트를 시작합니다.');
+  try {
+    const image = await generateChatGptThumbnail(sample, { width, height });
+    res.json({
+      ok: true,
+      kb: Math.round(image.bytes / 1024),
+      dataUri: image.dataUri,
+      settings: publicSettings(),
+    });
+  } catch (error) {
+    logger.error(`ChatGPT 썸네일 테스트 실패: ${error.message}`);
+    res.json({ ok: true, failed: true, message: error.message, settings: publicSettings() });
+  }
+}));
+
 /* ---------- 참고 예시 ---------- */
 
 app.get('/api/examples', wrap(async (req, res) => {
@@ -694,6 +756,7 @@ async function shutdown() {
   logger.info('종료합니다...');
   runner.stop();
   await closeRenderBrowser().catch(() => {});
+  await closeChatGpt().catch(() => {});
   server?.close(() => process.exit(0));
   setTimeout(() => process.exit(0), 3000).unref();
 }

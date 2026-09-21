@@ -334,6 +334,29 @@
         <label class="check"><input id="s-thumb-featured" type="checkbox"> 대표 이미지로 지정<span class="sub">목록·공유 미리보기에 쓰입니다</span></label>
         <label class="check"><input id="s-thumb-emoji" type="checkbox"> 썸네일에 이모지 허용<span class="sub">승인 심사에서는 꺼두는 편이 안전합니다</span></label>
 
+        <label class="wide check"><input id="s-chatgpt" type="checkbox"> 구독 중인 <b>ChatGPT</b>로 썸네일 만들기
+          <span class="sub">이미 내고 있는 구독료 안에서 해결되니 <b>추가 비용이 없습니다.</b>
+            브라우저 창을 띄워 ChatGPT 에 직접 물어보는 방식이라 API 보다 느리고
+            (한 장에 1~3분), ChatGPT 화면이 바뀌면 깨질 수 있습니다.
+            <b>실패하면 아래 이미지 API → HTML 썸네일 순으로 알아서 내려갑니다.</b><br>
+            <b>임시 채팅이 아니라 일반 채팅</b>에서 만듭니다. 켜져 있으면 알아서 끕니다</span></label>
+        <label class="wide">
+          <span class="row">
+            <button class="btn" id="btn-chatgpt-login" type="button">ChatGPT 로그인</button>
+            <button class="btn" id="btn-chatgpt-test" type="button">ChatGPT로 한 장 뽑아보기</button>
+            <span class="hint" id="chatgpt-state">로그인한 적이 없습니다</span>
+          </span>
+          <span class="sub">로그인은 <b>사람이 창에서 직접</b> 합니다. 이 프로그램은 비밀번호를 묻지도,
+            저장하지도 않습니다. 한 번 로그인하면 <b>data/chatgpt-profile</b> 에 세션이 남아
+            그다음부터는 자동으로 들어갑니다</span>
+        </label>
+        <label class="wide">ChatGPT 에 덧붙일 요청 (선택)
+          <input id="s-chatgpt-suffix" type="text" placeholder="예) 파스텔 톤으로, 사람 얼굴 없이">
+          <span class="sub">매번 프롬프트 끝에 붙습니다. 비워 두셔도 됩니다</span>
+        </label>
+        <div id="chatgpt-test-result" class="test-result hidden"></div>
+        <img id="chatgpt-test-preview" class="image-preview hidden" alt="ChatGPT가 만든 썸네일">
+
         <label class="wide check"><input id="s-image" type="checkbox"> 썸네일을 이미지 API로 만들기
           <span class="sub">끄면 지금까지처럼 HTML로 단색 썸네일을 만듭니다 (추가 비용 없음).
             어느 쪽이든 생성이 실패하면 HTML 썸네일로 자동으로 돌아갑니다</span></label>
