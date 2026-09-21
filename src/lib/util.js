@@ -105,6 +105,41 @@ export function parseBigTopics(raw = '') {
   return list;
 }
 
+/**
+ * 제목을 여러 줄 붙여넣은 덩어리를 제목 목록으로 만든다.
+ *
+ * `parseTopics` 와 다른 점은 **적은 문장이 그대로 글 제목이 된다**는 것이다.
+ * 저쪽은 "이런 걸 써줘" 하는 힌트라 AI 가 제목을 다시 짓지만, 이쪽은
+ * 한 글자도 바꾸지 않는다. 그래서 따옴표와 목록 기호만 떼고 나머지는 건드리지 않는다.
+ * (제목에 쓰인 물음표, 쉼표, 숫자는 의도적으로 넣은 것이므로 그대로 둔다)
+ */
+export function parseTitles(raw = '') {
+  const seen = new Set();
+  const titles = [];
+
+  for (const line of String(raw).split(/\r?\n/)) {
+    const title = line
+      .split('\t')[0]
+      .trim()
+      .replace(/^["'“”‘’]+|["'“”‘’]+$/g, '')
+      // 번호 매긴 목록을 붙여넣는 일이 잦다. "1. " 이 제목에 남으면 안 된다.
+      .replace(/^\s*(?:[-*•·]|\d+[.)])\s+/, '')
+      .trim()
+      .replace(/\s+/g, ' ')
+      .slice(0, 120);
+    if (!title) continue;
+    if (/^(제목|title|주제|topic)$/i.test(title)) continue;
+    // 제목이라기엔 너무 짧은 줄은 실수로 들어간 것으로 본다.
+    if (title.length < 5) continue;
+
+    const key = title.toLowerCase().replace(/\s+/g, '');
+    if (seen.has(key)) continue;
+    seen.add(key);
+    titles.push(title);
+  }
+  return titles;
+}
+
 export function nowIso() {
   return new Date().toISOString();
 }

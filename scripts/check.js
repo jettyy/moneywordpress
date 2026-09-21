@@ -38,7 +38,9 @@ import {
 import {
   addTopics, nextPending, cancelPendingJobs, listJobs, clearJobs,
 } from '../src/lib/store.js';
-import { normalizeSiteUrl, normalizeSlug, parseTopics, parseBigTopics } from '../src/lib/util.js';
+import {
+  normalizeSiteUrl, normalizeSlug, parseTopics, parseBigTopics, parseTitles,
+} from '../src/lib/util.js';
 
 const settings = structuredClone(DEFAULT_SETTINGS);
 
@@ -684,6 +686,66 @@ test('큰 표 구간 프롬프트도 거절을 막되 지어내기는 막는다'
   assert.match(prompt, /거절하지 마세요/);
   assert.match(prompt, /있는 만큼만 채우고 거기서 멈추세요/, '짧은 표를 허용하지 않았습니다');
   assert.match(prompt, /지어내/, '가짜 이름 금지가 빠졌습니다');
+});
+
+/* ---------- 제목 직접 정하기 ---------- */
+
+test('제목을 줄 단위로 읽고 기호만 떼어낸다', () => {
+  const titles = parseTitles(`2026년 수도권 대학 순위 TOP 50 총정리
+
+- 청년월세 특별지원, 신청 전에 꼭 확인할 7가지
+1. 전기차 보조금은 왜 지역마다 다를까
+"따옴표로 감싼 제목입니다"`);
+  assert.deepEqual(titles, [
+    '2026년 수도권 대학 순위 TOP 50 총정리',
+    '청년월세 특별지원, 신청 전에 꼭 확인할 7가지',
+    '전기차 보조금은 왜 지역마다 다를까',
+    '따옴표로 감싼 제목입니다',
+  ]);
+});
+
+test('제목의 물음표와 쉼표와 숫자는 건드리지 않는다', () => {
+  // 큰 주제 파서와 달리 여기 적은 문장은 그대로 제목이 된다. 다듬으면 안 된다.
+  const [title] = parseTitles('전기차 보조금, 2026년에는 얼마나 받을까?');
+  assert.equal(title, '전기차 보조금, 2026년에는 얼마나 받을까?');
+});
+
+test('제목 목록에서 중복과 너무 짧은 줄을 버린다', () => {
+  const titles = parseTitles('제목\n같은 제목입니다\n같은  제목입니다\n짧음\n다른 제목입니다');
+  assert.deepEqual(titles, ['같은 제목입니다', '다른 제목입니다']);
+});
+
+test('제목을 정해 주면 프롬프트가 그대로 쓰라고 못박는다', () => {
+  const prompt = buildMainPrompt('청년월세 지원 7가지', settings, {
+    guidelineBlock: '', exampleBlock: '', researchBlock: '', shape: 'items', count: 7,
+    fixedTitle: '청년월세 특별지원, 신청 전에 꼭 확인할 7가지',
+  });
+  assert.match(prompt, /청년월세 특별지원, 신청 전에 꼭 확인할 7가지/);
+  assert.match(prompt, /한 글자도 바꾸지 말고 그대로/);
+  // 제목만 강제하고 본문이 따로 놀면 의미가 없다.
+  assert.match(prompt, /본문을 이 제목에 맞추세요/, '본문을 맞추라는 지시가 빠졌습니다');
+  assert.match(prompt, /제목에 개수가 있으면/);
+  // 앞뒤 두 군데에 넣는다.
+  assert.ok(
+    prompt.split('청년월세 특별지원, 신청 전에 꼭 확인할 7가지').length - 1 >= 2,
+    '제목을 프롬프트 앞뒤로 못박지 않았습니다',
+  );
+});
+
+test('제목을 안 정하면 제목 블록이 아예 안 들어간다', () => {
+  const prompt = buildMainPrompt('청년월세 지원', settings, {
+    guidelineBlock: '', exampleBlock: '', researchBlock: '', shape: 'general', count: null,
+  });
+  assert.doesNotMatch(prompt, /사람이 직접 정했습니다/);
+});
+
+test('제목을 정한 작업은 작업 목록에 그 제목이 남는다', () => {
+  clearJobs(false);
+  const [job] = addTopics([{ topic: '정해둔 제목입니다', fixedTitle: '정해둔 제목입니다' }]);
+  assert.equal(job.fixedTitle, '정해둔 제목입니다');
+  // 발굴해 온 주제는 제목을 정하지 않는다.
+  assert.equal(addTopics([{ topic: '발굴해 온 주제입니다' }])[0].fixedTitle, '');
+  clearJobs(false);
 });
 
 /* ---------- 주제 발굴 ---------- */

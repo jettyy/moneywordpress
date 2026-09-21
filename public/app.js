@@ -204,6 +204,10 @@ function sourceCell(job) {
  * 직접 적은 주제는 점수가 없으므로 빈 칸으로 둔다.
  */
 function scoreCell(job) {
+  // 제목을 직접 정한 글은 관심도 점수가 없다. 대신 그 사실을 표시한다.
+  if (job.fixedTitle) {
+    return '<span class="check-badge" title="제목을 직접 정한 글입니다. AI가 제목을 바꾸지 않습니다.">제목 지정</span>';
+  }
   if (!job.score) return '<span class="hint">-</span>';
   const tip = [
     job.why ? `왜: ${job.why}` : '',
@@ -939,6 +943,58 @@ const setAllPicks = (checked) => {
 };
 $('btn-pick-all').onclick = () => setAllPicks(true);
 $('btn-pick-none').onclick = () => setAllPicks(false);
+
+/* 제목 직접 정하기 — 적은 문장이 그대로 제목이 된다. */
+
+$('btn-title-toggle').onclick = () => {
+  const box = $('title-box');
+  box.classList.toggle('hidden');
+  const open = !box.classList.contains('hidden');
+  $('btn-title-toggle').textContent = open ? '제목 정하기 닫기' : '제목 직접 정하기';
+  if (open) $('title-list').focus();
+};
+
+let titleTimer = null;
+$('title-list').addEventListener('input', () => {
+  clearTimeout(titleTimer);
+  titleTimer = setTimeout(async () => {
+    try {
+      const data = await api('/api/titles/preview', {
+        method: 'POST', body: { raw: $('title-list').value },
+      });
+      $('title-count').textContent = `${data.count}개 인식 · 글 ${data.count}편`;
+    } catch {
+      $('title-count').textContent = '0개 인식';
+    }
+  }, 250);
+});
+
+$('btn-title-clear').onclick = () => {
+  $('title-list').value = '';
+  $('title-count').textContent = '0개 인식';
+};
+
+$('btn-title-add').onclick = async () => {
+  const raw = $('title-list').value;
+  if (!raw.trim()) return toast('제목을 붙여넣어 주세요.');
+
+  const button = $('btn-title-add');
+  button.disabled = true;
+  try {
+    const data = await api('/api/titles', { method: 'POST', body: { raw } });
+    $('title-list').value = '';
+    $('title-count').textContent = '0개 인식';
+    await refreshState();
+    const dup = data.skipped ? ` (중복 ${data.skipped}건 제외)` : '';
+    toast(data.started
+      ? `제목 ${data.added}건을 넣고 시작했습니다.${dup}`
+      : `제목 ${data.added}건을 넣었습니다.${dup} ${data.startMessage}`);
+  } catch (error) {
+    toast(error.message);
+  } finally {
+    button.disabled = false;
+  }
+};
 
 $('btn-manual-toggle').onclick = () => {
   const box = $('manual-box');

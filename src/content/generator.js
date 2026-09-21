@@ -282,6 +282,31 @@ const REFUSAL_RETRY_BLOCK = `
 
 설명이나 사과를 적지 말고 **JSON 객체 하나만** 출력하세요.`;
 
+/**
+ * 제목을 사람이 직접 정한 경우의 지시.
+ *
+ * 제목만 강제하고 끝내면 본문이 따로 논다. "TOP 7" 이라고 못박아 놓고
+ * 항목을 다섯 개만 쓰는 식이다. 그래서 제목을 고정하는 김에
+ * **본문을 제목에 맞추라**는 것까지 같이 시킨다. 그게 이 기능의 목적이다.
+ */
+function fixedTitleBlock(fixedTitle) {
+  if (!fixedTitle) return '';
+  return `
+[제목 — 사람이 직접 정했습니다. 그대로 쓰세요]
+
+    ${fixedTitle}
+
+- title 필드에 위 문장을 **한 글자도 바꾸지 말고 그대로** 넣으세요.
+  다듬지도, 줄이지도, 연도를 고치지도 마세요.
+- **본문을 이 제목에 맞추세요.** 제목이 약속한 것을 본문이 지켜야 합니다.
+    제목에 개수가 있으면(TOP 7, 5가지) 그 개수를 채웁니다.
+    제목에 연도나 시점이 있으면 그 기준으로 씁니다.
+    제목이 질문이면 본문에서 그 질문에 답합니다.
+    제목이 특정 대상(수도권, 30대, 무주택자)을 가리키면 그 대상 기준으로 씁니다.
+- summary, slug, 썸네일 문구도 이 제목과 같은 방향으로 맞추세요.
+`;
+}
+
 function honestyBlock(hasResearch) {
   const lines = ['[사실관계]'];
   if (hasResearch) {
@@ -322,7 +347,7 @@ const FORMAT_BLOCK = [
 /* ------------------------------------------------------------------ */
 
 export function buildMainPrompt(topic, settings, {
-  guidelineBlock, exampleBlock, researchBlock, shape, count,
+  guidelineBlock, exampleBlock, researchBlock, shape, count, fixedTitle = '',
 }) {
   const withTableRows = shape !== 'table';   // 큰 표는 뒤에서 따로 채운다.
   const tableHint = withTableRows
@@ -333,7 +358,7 @@ export function buildMainPrompt(topic, settings, {
   return `${guidelineBlock}${basicsBlock(settings, topic)}
 
 위 주제로 워드프레스에 올릴 애드센스 승인용 정보성 포스팅 한 편을 써주세요.
-
+${fixedTitleBlock(fixedTitle)}
 ${NO_REFUSAL_BLOCK}
 ${researchBlock ? `\n${researchBlock}` : ''}
 ${buildRuleBlock(settings, shape)}
@@ -361,7 +386,10 @@ ${jsonShape({
 필요 없는 키는 빼도 되지만 title, intro, sections, outro, table 은 반드시 채우세요.
 
 [다시 한 번] 자료가 부족하다는 이유로 거절하지 마세요. 과거 자료와 일반적으로 알려진
-내용으로 채우고 근거 수준만 밝히면 됩니다. 설명 문장이 아니라 JSON 을 출력하세요.${buildGuidelineReminder(settings.post.extraGuideline)}`;
+내용으로 채우고 근거 수준만 밝히면 됩니다. 설명 문장이 아니라 JSON 을 출력하세요.${fixedTitle ? `
+
+[제목 확인] title 은 반드시 아래 문장 그대로여야 합니다.
+${fixedTitle}` : ''}${buildGuidelineReminder(settings.post.extraGuideline)}`;
 }
 
 /* ------------------------------------------------------------------ */
@@ -622,6 +650,8 @@ async function repairUntilCompliant(post, { topic, settings, systemPrompt, signa
 
 export async function generatePost(topic, options = {}) {
   const settings = getSettings();
+  // 사람이 제목을 직접 정한 경우. 프롬프트로 시키고, 마지막에 한 번 더 못박는다.
+  const fixedTitle = String(options.fixedTitle || '').trim();
   const guideline = String(settings.post.extraGuideline || '').trim();
   const guidelineBlock = buildGuidelineBlock(guideline);
   const exampleBlock = buildExampleBlock();
@@ -654,7 +684,7 @@ export async function generatePost(topic, options = {}) {
 
   /* 2단계 — 도구를 끄고, 모아온 자료만 보고 글을 쓴다. */
   const mainPrompt = buildMainPrompt(
-    topic, settings, { guidelineBlock, exampleBlock, researchBlock, shape, count },
+    topic, settings, { guidelineBlock, exampleBlock, researchBlock, shape, count, fixedTitle },
   );
 
   let reply;
@@ -730,6 +760,17 @@ export async function generatePost(topic, options = {}) {
     signal: options.signal,
     onProgress: options.onCompliance,
   });
+
+  // 제목을 정해 줬으면 마지막에 그대로 덮어쓴다.
+  //
+  // 프롬프트로 시키는 것만으로는 부족하다. 모델이 제목을 슬쩍 다듬기도 하고,
+  // 준수 보정 단계에서 글 전체를 다시 쓰면서 제목이 바뀌기도 한다.
+  // "정해 준 제목 그대로" 는 약속이라 코드로 지킨다.
+  if (fixedTitle && post.title !== fixedTitle) {
+    if (post.title) logger.info(`[${topic}] 제목을 지정한 문장으로 되돌립니다: "${post.title}"`);
+    post.title = fixedTitle;
+  }
+  post.fixedTitle = fixedTitle;
 
   return post;
 }

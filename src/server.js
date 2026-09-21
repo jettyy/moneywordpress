@@ -10,7 +10,9 @@ import {
 import {
   listRequests, addRequest, getRequest, removeRequest, clearRequests, isOpen,
 } from './lib/requests.js';
-import { parseTopics, parseBigTopics, normalizeSiteUrl } from './lib/util.js';
+import {
+  parseTopics, parseBigTopics, parseTitles, normalizeSiteUrl,
+} from './lib/util.js';
 import {
   verifyConnection, readSiteInfo, disconnect, listCategories,
 } from './wordpress/client.js';
@@ -338,6 +340,47 @@ app.post('/api/discover/history/clear', wrap(async (req, res) => {
   clearHistory();
   logger.info('발굴 기록을 지웠습니다. 앞으로는 예전에 쓴 주제도 다시 고를 수 있습니다.');
   res.json({ ok: true, history: historyStats(getSettings().discover.bigTopic) });
+}));
+
+/* ---------- 제목 직접 정하기 ---------- */
+
+app.post('/api/titles/preview', wrap(async (req, res) => {
+  const titles = parseTitles(req.body?.raw || '');
+  res.json({ ok: true, count: titles.length, titles: titles.slice(0, 200) });
+}));
+
+/**
+ * 제목을 줄 단위로 받아 작업 목록에 넣는다.
+ *
+ * 주제로 넣는 것과 다른 점은 **AI 가 제목을 다시 짓지 않는다**는 것이다.
+ * 적은 문장이 그대로 글 제목이 되고, 본문이 그 제목에 맞춰진다.
+ */
+app.post('/api/titles', wrap(async (req, res) => {
+  const titles = parseTitles(req.body?.raw || '');
+  if (!titles.length) {
+    res.status(400).json({ ok: false, message: '제목을 한 줄에 하나씩 붙여넣어 주세요.' });
+    return;
+  }
+  // topic 과 fixedTitle 을 같은 문장으로 둔다.
+  // topic 은 "무엇에 대한 글인가"(자료 조사와 글 모양 판단에 쓰임),
+  // fixedTitle 은 "제목을 이걸로 하라"는 약속이다.
+  const added = addTopics(titles.map((title) => ({ topic: title, fixedTitle: title })));
+  logger.info(
+    `제목을 지정한 글 ${added.length}건을 추가했습니다. `
+    + `(붙여넣기 ${titles.length}줄${titles.length - added.length ? `, 중복 ${titles.length - added.length}건 제외` : ''})`,
+  );
+
+  const started = runner.ensureRunning();
+  if (!started.ok) logger.warn(`작업 목록에 넣었지만 아직 실행하지 못합니다: ${started.message}`);
+
+  res.json({
+    ok: true,
+    added: added.length,
+    skipped: titles.length - added.length,
+    jobs: listJobs(),
+    started: started.ok,
+    startMessage: started.ok ? '' : started.message,
+  });
 }));
 
 /* ---------- 주제 ---------- */

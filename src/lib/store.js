@@ -85,6 +85,8 @@ export function addTopics(topics, requestId = '') {
       id: shortId(),
       topic,
       requestId,
+      // 사람이 제목을 직접 정한 경우. AI 가 제목을 다시 짓지 않고 이 문장을 그대로 쓴다.
+      fixedTitle: pick.fixedTitle || '',
       // 발굴로 들어온 주제에만 채워진다. 직접 적은 주제는 빈 값이다.
       bigTopic: pick.bigTopic || '',
       why: pick.why || '',

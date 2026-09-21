@@ -106,9 +106,13 @@ async function processJob(job) {
       : 'AI가 애드센스 승인 기준에 맞춰 글을 쓰는 중...',
     attempts: job.attempts + 1,
   });
-  logger.step(`[${job.topic}] 글 생성 시작`, { jobId: job.id });
+  logger.step(
+    `[${job.topic}] 글 생성 시작${job.fixedTitle ? ' (제목 지정됨)' : ''}`,
+    { jobId: job.id },
+  );
 
   const post = await generatePost(job.topic, {
+    fixedTitle: job.fixedTitle || '',
     signal: state.abort?.signal,
     onResearch: () => {
       if (!settings.research.enabled) return;
